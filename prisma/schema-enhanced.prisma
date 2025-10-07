@@ -1,0 +1,459 @@
+// This is your enhanced Prisma schema file for custom printing shop
+// learn more about it in the docs: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// User Management
+model User {
+  id          String   @id @default(cuid())
+  email       String   @unique
+  username    String   @unique
+  password    String
+  firstName   String
+  lastName    String
+  role        UserRole @default(STAFF)
+  isActive    Boolean  @default(true)
+  lastLogin   DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  orders      Order[]
+  invoices    Invoice[]
+  payments    Payment[]
+  inventoryMovements InventoryMovement[]
+  auditLogs   AuditLog[]
+  attendance  Attendance[]
+  commissions Commission[]
+
+  @@map("users")
+}
+
+enum UserRole {
+  ADMIN
+  MANAGER
+  CASHIER
+  OPERATOR
+  STAFF
+}
+
+// Customer Management
+model Customer {
+  id          String   @id @default(cuid())
+  firstName   String
+  lastName    String
+  email       String?  @unique
+  phone       String?
+  address     String?
+  city        String?
+  state       String?
+  zipCode     String?
+  country     String?  @default("BD")
+  company     String?
+  taxId       String?
+  isActive    Boolean  @default(true)
+  loyaltyPoints Int    @default(0)
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  orders      Order[]
+  invoices    Invoice[]
+  payments    Payment[]
+
+  @@map("customers")
+}
+
+// Product Categories
+model Category {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  parentId    String?
+  isActive    Boolean  @default(true)
+  sortOrder   Int      @default(0)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  parent      Category? @relation("CategoryHierarchy", fields: [parentId], references: [id])
+  children    Category[] @relation("CategoryHierarchy")
+  products    Product[]
+
+  @@map("categories")
+}
+
+// Enhanced Product Management
+model Product {
+  id          String   @id @default(cuid())
+  name        String
+  description String?
+  sku         String   @unique
+  barcode     String?  @unique
+  categoryId  String
+  type        ProductType
+  pricingModel PricingModel @default(FIXED) // NEW: How pricing works
+  basePrice   Decimal  @db.Decimal(10, 2) // NEW: Base/reference price
+  baseCostPrice Decimal @db.Decimal(10, 2) // NEW: Base cost price
+  taxRate     Decimal  @db.Decimal(5, 4) @default(0)
+  isActive    Boolean  @default(true)
+  isService   Boolean  @default(false)
+  hasInventory Boolean  @default(false) // Changed default for custom orders
+  minStock    Int      @default(0)
+  maxStock    Int?
+  unit        String   @default("piece")
+  weight      Decimal? @db.Decimal(8, 3)
+  dimensions  String?
+  imageUrl    String?
+  specifications Json?
+  isCustomOrder Boolean @default(true) // NEW: Can be custom ordered
+  requiresSpecifications Boolean @default(false) // NEW: Needs custom specs
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  category    Category @relation(fields: [categoryId], references: [id])
+  orderItems  OrderItem[]
+  inventory   Inventory?
+  inventoryMovements InventoryMovement[] @relation("ProductMovements")
+  priceHistory PriceHistory[]
+  productPricingTiers ProductPricingTier[] // NEW: Variable pricing tiers
+
+  @@map("products")
+}
+
+enum ProductType {
+  PHYSICAL
+  SERVICE
+  DIGITAL
+}
+
+enum PricingModel {
+  FIXED        // Fixed price per unit
+  VARIABLE     // Variable pricing based on quantity/tier
+  CUSTOM       // Fully custom pricing per order
+  AREA_BASED   // Price per square foot/meter
+  TIME_BASED   // Price per hour/day
+}
+
+// NEW: Product Pricing Tiers for variable pricing
+model ProductPricingTier {
+  id          String   @id @default(cuid())
+  productId   String
+  minQuantity Int      // Minimum quantity for this tier
+  maxQuantity Int?     // Maximum quantity for this tier (null = unlimited)
+  unitPrice   Decimal  @db.Decimal(10, 2)
+  costPrice   Decimal  @db.Decimal(10, 2)
+  discount    Decimal  @db.Decimal(5, 4) @default(0) // Percentage discount
+  isActive    Boolean  @default(true)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  product     Product  @relation(fields: [productId], references: [id])
+
+  @@unique([productId, minQuantity])
+  @@map("product_pricing_tiers")
+}
+
+// Enhanced Order Management
+model Order {
+  id          String   @id @default(cuid())
+  orderNumber String   @unique
+  customerId  String?
+  userId      String
+  status      OrderStatus @default(PENDING)
+  type        OrderType @default(SALE)
+  orderType   OrderTypeEnum @default(CUSTOM) // NEW: Type of order
+  subtotal    Decimal  @db.Decimal(10, 2)
+  taxAmount   Decimal  @db.Decimal(10, 2)
+  discountAmount Decimal  @db.Decimal(10, 2) @default(0)
+  total       Decimal  @db.Decimal(10, 2)
+  notes       String?
+  dueDate     DateTime?
+  completedAt DateTime?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  customer    Customer? @relation(fields: [customerId], references: [id])
+  user        User     @relation(fields: [userId], references: [id])
+  items       OrderItem[]
+  invoices    Invoice[]
+  payments    Payment[]
+
+  @@map("orders")
+}
+
+enum OrderStatus {
+  PENDING
+  CONFIRMED
+  IN_PROGRESS
+  READY
+  COMPLETED
+  CANCELLED
+  REFUNDED
+}
+
+enum OrderType {
+  SALE
+  PURCHASE
+  RETURN
+  TRANSFER
+}
+
+enum OrderTypeEnum {
+  RETAIL      // Standard retail order
+  CUSTOM      // Custom order with variable pricing
+  WHOLESALE   // Wholesale order
+  BULK        // Bulk order
+}
+
+// Enhanced Order Item with custom pricing support
+model OrderItem {
+  id          String   @id @default(cuid())
+  orderId     String
+  productId   String
+  quantity    Int
+  unit        String   @default("piece") // NEW: Unit for this order
+  unitPrice   Decimal  @db.Decimal(10, 2) // Custom unit price for this order
+  costPrice   Decimal  @db.Decimal(10, 2) // NEW: Cost price for this order
+  discount    Decimal  @db.Decimal(10, 2) @default(0)
+  taxAmount   Decimal  @db.Decimal(10, 2)
+  total       Decimal  @db.Decimal(10, 2)
+  notes       String?
+  specifications Json? // Custom specifications for this order
+  customDimensions String? // NEW: Custom dimensions (e.g., "3x8 ft")
+  customRequirements String? // NEW: Special requirements
+  isCustomPriced Boolean @default(false) // NEW: Whether this item has custom pricing
+
+  // Relations
+  order       Order    @relation(fields: [orderId], references: [id])
+  product     Product  @relation(fields: [productId], references: [id])
+
+  @@map("order_items")
+}
+
+// Inventory Management (simplified for custom orders)
+model Inventory {
+  id          String   @id @default(cuid())
+  productId   String   @unique
+  quantity    Int      @default(0)
+  reserved    Int      @default(0)
+  available   Int      @default(0)
+  lastUpdated DateTime @default(now())
+
+  // Relations
+  product     Product  @relation(fields: [productId], references: [id])
+  movements   InventoryMovement[] @relation("InventoryMovements")
+
+  @@map("inventory")
+}
+
+model InventoryMovement {
+  id          String   @id @default(cuid())
+  productId   String
+  type        MovementType
+  quantity    Int
+  previousQuantity Int
+  newQuantity Int
+  reason      String?
+  reference   String?
+  userId      String
+  createdAt   DateTime @default(now())
+
+  // Relations
+  product     Product  @relation("ProductMovements", fields: [productId], references: [id], map: "InventoryMovement_productId_fkey")
+  inventory   Inventory @relation("InventoryMovements", fields: [productId], references: [productId], map: "InventoryMovement_inventoryId_fkey")
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@map("inventory_movements")
+}
+
+enum MovementType {
+  PURCHASE
+  SALE
+  ADJUSTMENT
+  TRANSFER
+  RETURN
+  DAMAGE
+  EXPIRY
+}
+
+// Invoice Management
+model Invoice {
+  id          String   @id @default(cuid())
+  invoiceNumber String @unique
+  orderId     String?
+  customerId  String?
+  userId      String
+  status      InvoiceStatus @default(DRAFT)
+  subtotal    Decimal  @db.Decimal(10, 2)
+  taxAmount   Decimal  @db.Decimal(10, 2)
+  discountAmount Decimal @db.Decimal(10, 2) @default(0)
+  total       Decimal  @db.Decimal(10, 2)
+  dueDate     DateTime?
+  paidAt      DateTime?
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  order       Order?   @relation(fields: [orderId], references: [id])
+  customer    Customer? @relation(fields: [customerId], references: [id])
+  user        User     @relation(fields: [userId], references: [id])
+  payments    Payment[]
+
+  @@map("invoices")
+}
+
+enum InvoiceStatus {
+  DRAFT
+  SENT
+  PAID
+  OVERDUE
+  CANCELLED
+}
+
+// Payment Management
+model Payment {
+  id          String   @id @default(cuid())
+  orderId     String?
+  invoiceId   String?
+  customerId  String?
+  userId      String
+  amount      Decimal  @db.Decimal(10, 2)
+  method      PaymentMethod
+  reference   String?
+  status      PaymentStatus @default(PENDING)
+  processedAt DateTime?
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  // Relations
+  order       Order?   @relation(fields: [orderId], references: [id])
+  invoice     Invoice? @relation(fields: [invoiceId], references: [id])
+  customer    Customer? @relation(fields: [customerId], references: [id])
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@map("payments")
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  BANK_TRANSFER
+  CHECK
+  DIGITAL_WALLET
+  OTHER
+}
+
+enum PaymentStatus {
+  PENDING
+  COMPLETED
+  FAILED
+  CANCELLED
+  REFUNDED
+}
+
+// Staff Management
+model Attendance {
+  id          String   @id @default(cuid())
+  userId      String
+  date        DateTime @db.Date
+  clockIn     DateTime?
+  clockOut    DateTime?
+  breakStart  DateTime?
+  breakEnd    DateTime?
+  totalHours  Decimal? @db.Decimal(4, 2)
+  notes       String?
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  // Relations
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@unique([userId, date])
+  @@map("attendance")
+}
+
+model Commission {
+  id          String   @id @default(cuid())
+  userId      String
+  orderId     String?
+  amount      Decimal  @db.Decimal(10, 2)
+  rate        Decimal  @db.Decimal(5, 4)
+  period      String   // e.g., "2024-01"
+  status      CommissionStatus @default(PENDING)
+  paidAt      DateTime?
+  notes       String?
+  createdAt   DateTime @default(now())
+
+  // Relations
+  user        User     @relation(fields: [userId], references: [id])
+
+  @@map("commissions")
+}
+
+enum CommissionStatus {
+  PENDING
+  APPROVED
+  PAID
+  CANCELLED
+}
+
+// Price History
+model PriceHistory {
+  id          String   @id @default(cuid())
+  productId   String
+  oldPrice    Decimal  @db.Decimal(10, 2)
+  newPrice    Decimal  @db.Decimal(10, 2)
+  reason      String?
+  userId      String?
+  createdAt   DateTime @default(now())
+
+  // Relations
+  product     Product  @relation(fields: [productId], references: [id])
+
+  @@map("price_history")
+}
+
+// Audit Logging
+model AuditLog {
+  id          String   @id @default(cuid())
+  userId      String?
+  action      String
+  entity      String
+  entityId    String?
+  oldValues   Json?
+  newValues   Json?
+  ipAddress   String?
+  userAgent   String?
+  createdAt   DateTime @default(now())
+
+  // Relations
+  user        User?    @relation(fields: [userId], references: [id])
+
+  @@map("audit_logs")
+}
+
+// System Settings
+model Setting {
+  id          String   @id @default(cuid())
+  key         String   @unique
+  value       String
+  description String?
+  isPublic    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  @@map("settings")
+}

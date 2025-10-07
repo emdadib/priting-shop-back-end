@@ -1,0 +1,20 @@
+import { Request, Response } from 'express';
+export declare const getAllProducts: (req: Request, res: Response) => Promise<Response | void>;
+export declare const getProductById: (req: Request, res: Response) => Promise<Response | void>;
+export declare const searchProducts: (req: Request, res: Response) => Promise<Response | void>;
+export declare const getProductsByCategory: (req: Request, res: Response) => Promise<Response | void>;
+export declare const getProductsByType: (req: Request, res: Response) => Promise<Response | void>;
+export declare const getProductSummary: (req: Request, res: Response) => Promise<Response | void>;
+export declare const createProduct: (req: Request, res: Response) => Promise<Response | void>;
+export declare const updateProduct: (req: Request, res: Response) => Promise<Response | void>;
+export declare const deleteProduct: (req: Request, res: Response) => Promise<Response | void>;
+export declare const bulkUpdateProducts: (req: Request, res: Response) => Promise<Response | void>;
+export declare const getAllCategories: (req: Request, res: Response) => Promise<Response | void>;
+export declare const createCategory: (req: Request, res: Response) => Promise<Response | void>;
+export declare const updateCategory: (req: Request, res: Response) => Promise<Response | void>;
+export declare const deleteCategory: (req: Request, res: Response) => Promise<Response | void>;
+export declare const generateSKU: (req: Request, res: Response) => Promise<Response | void>;
+export declare const getSKUStats: (req: Request, res: Response) => Promise<Response | void>;
+export declare const validateSKU: (req: Request, res: Response) => Promise<Response | void>;
+export declare const generateMultipleSKUs: (req: Request, res: Response) => Promise<Response | void>;
+//# sourceMappingURL=productController.d.ts.map

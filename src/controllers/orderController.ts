@@ -1,0 +1,662 @@
+import { Request, Response } from 'express';
+import { PrismaClient } from '@prisma/client';
+import { createAuditLog } from '../utils/auditLogger';
+
+const prisma = new PrismaClient();
+
+// Get all orders
+export const getAllOrders = async (req: Request, res: Response): Promise<Response | void> => {
+  try {
+    const orders = await prisma.order.findMany({
+      include: {
+        customer: true,
+        user: true,
+        items: {
+          include: {
+            product: true
+          }
+        }
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    });
+
+    res.json({
+      success: true,
+      data: orders
+    });
+  } catch (error) {
+    console.error('Get all orders error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch orders'
+    });
+  }
+};
+
+// Get order by ID
+export const getOrderById = async (req: Request, res: Response): Promise<Response | void> => {
+  try {
+    const { id } = req.params;
+
+    const order = await prisma.order.findUnique({
+      where: { id },
+      include: {
+        customer: true,
+        user: true,
+        items: {
+          include: {
+            product: true
+          }
+        }
+      }
+    });
+
+    if (!order) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found'
+      });
+    }
+
+    res.json({
+      success: true,
+      data: order
+    });
+  } catch (error) {
+    console.error('Get order by ID error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch order'
+    });
+  }
+};
+
+// Create order
+export const createOrder = async (req: Request, res: Response): Promise<Response | void> => {
+  try {
+    const { customerId, items, status, type, notes, discountAmount, discountType } = req.body;
+    const userId = req.user?.id;
+
+    console.log('Creating order:', {
+      customerId,
+      itemsCount: items?.length || 0,
+      status,
+      type,
+      discountAmount,
+      discountType
+    });
+
+    // Handle walk-in customers
+    let finalCustomerId = customerId;
+    if (customerId === 'walk-in') {
+      // Create a minimal walk-in customer record
+      const walkInCustomer = await prisma.customer.create({
+        data: {
+          firstName: 'Walk-in',
+          lastName: 'Customer',
+          email: `walkin-${Date.now()}@temp.com`,
+          phone: '',
+          address: '',
+          isActive: true,
+          isWalkIn: true // We'll add this field to the schema
+        }
+      });
+      finalCustomerId = walkInCustomer.id;
+      console.log('Created walk-in customer:', walkInCustomer.id);
+    }
+
+    if (!userId) {
+      return res.status(401).json({
+        success: false,
+        message: 'Authentication required'
+      });
+    }
+
+    // Calculate totals with discount support
+    let subtotal = items.reduce((sum: number, item: any) => {
+      const itemTotal = (item.unitPrice * item.quantity) - (item.discount || 0);
+      return sum + itemTotal;
+    }, 0);
+
+    // Apply order-level discount
+    if (discountAmount && discountAmount > 0) {
+      if (discountType === 'PERCENTAGE') {
+        subtotal = subtotal * (1 - discountAmount / 100);
+      } else {
+        subtotal = subtotal - discountAmount;
+      }
+    }
+
+    const totalTax = items.reduce((sum: number, item: any) => {
+      return sum + (item.taxAmount || 0);
+    }, 0);
+
+    const total = subtotal + totalTax;
+
+    // Generate order number
+    const orderNumber = `ORD-${Date.now()}-${Math.random().toString(36).substr(2, 5).toUpperCase()}`;
+
+    // Determine initial status based on order type
+    let initialStatus = status || 'PENDING';
+    if (type === 'DIRECT_SALE') {
+      initialStatus = 'COMPLETED'; // Direct sales complete instantly
+    }
+
+    const order = await prisma.order.create({
+      data: {
+        orderNumber,
+        customerId: finalCustomerId,
+        userId,
+        status: initialStatus,
+        type: type || 'SALE',
+        subtotal,
+        taxAmount: totalTax,
+        discountAmount: discountAmount || 0,
+        total,
+        notes,
+        items: {
+          create: items.map((item: any) => ({
+            productId: item.productId,
+            quantity: item.quantity,
+            unitPrice: item.unitPrice,
+            costPrice: item.costPrice || item.unitPrice, // Use unitPrice as costPrice if not provided
+            discount: item.discount || 0,
+            taxAmount: item.taxAmount || 0,
+            total: item.total,
+            notes: item.notes,
+            specifications: item.specifications,
+            serialNumbers: item.serialNumbers || null,
+            warrantyStartDate: item.warrantyStartDate ? new Date(item.warrantyStartDate) : null,
+            warrantyEndDate: item.warrantyEndDate ? new Date(item.warrantyEndDate) : null
+          }))
+        }
+      },
+      include: {
+        customer: true,
+        user: true,
+        items: {
+          include: {
+            product: true
+          }
+        }
+      }
+    });
+
+    // Update inventory for physical products when order is created
+    if (initialStatus === 'COMPLETED' || initialStatus === 'CONFIRMED') {
+      console.log('Order status indicates completion - updating inventory...');
+      
+      for (const item of items) {
+        // Get product details to check if it needs inventory tracking
+        const product = await prisma.product.findUnique({
+          where: { id: item.productId },
+          select: {
+            id: true,
+            name: true,
+            type: true,
+            hasInventory: true
+          }
+        });
+
+        if (product && product.type === 'PHYSICAL' && product.hasInventory) {
+          console.log('Updating inventory for sale item:', {
+            productId: item.productId,
+            productName: product.name,
+            quantity: item.quantity
+          });
+
+          // Check if inventory record exists
+          const existingInventory = await prisma.inventory.findUnique({
+            where: { productId: item.productId }
+          });
+
+          if (existingInventory) {
+            // Update existing inventory (decrease stock)
+            const newQuantity = Math.max(0, existingInventory.quantity - item.quantity);
+            const newAvailable = Math.max(0, existingInventory.available - item.quantity);
+            
+            await prisma.inventory.update({
+              where: { productId: item.productId },
+              data: {
+                quantity: newQuantity,
+                available: newAvailable,
+                lastUpdated: new Date()
+              }
+            });
+
+            // Create inventory movement record
+            await prisma.inventoryMovement.create({
+              data: {
+                productId: item.productId,
+                type: 'SALE',
+                quantity: -item.quantity, // Negative for sales
+                previousQuantity: existingInventory.quantity,
+                newQuantity: newQuantity,
+                reason: `Sale order ${orderNumber} - Stock decrease`,
+                reference: `ORD-${orderNumber}`,
+                userId: userId
+              }
+            });
+
+            console.log('Inventory updated for product:', product.name, 'New quantity:', newQuantity);
+          } else {
+            console.log('No inventory record found for product:', product.name);
+          }
+        }
+      }
+    }
+
+    // Create customer ledger transaction for the order (DEBIT - customer owes money)
+    await prisma.customerTransaction.create({
+      data: {
+        customerId: finalCustomerId,
+        type: 'DEBIT',
+        amount: total,
+        description: `Order ${orderNumber}`,
+        referenceType: 'ORDER',
+        referenceId: order.id,
+        date: new Date()
+      }
+    });
+
+    // Create company ledger transaction for sales revenue (CREDIT - revenue increases)
+    await prisma.companyTransaction.create({
+      data: {
+        accountType: 'SALES',
+        type: 'CREDIT',
+        amount: total,
+        description: `Sales Revenue - Order ${orderNumber}`,
+        reference: orderNumber,
+        referenceType: 'ORDER',
+        referenceId: order.id,
+        date: new Date(),
+        isActive: true
+      }
+    });
+
+    // Create audit log
+    await createAuditLog({
+      userId,
+      action: 'CREATE',
+      entity: 'ORDER',
+      entityId: order.id,
+      newValues: { customerId, status, type, items },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent')
+    });
+
+    res.status(201).json({
+      success: true,
+      data: order
+    });
+  } catch (error) {
+    console.error('Create order error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to create order'
+    });
+  }
+};
+
+// Update order
+export const updateOrder = async (req: Request, res: Response): Promise<Response | void> => {
+  try {
+    const { id } = req.params;
+    const { status, notes } = req.body;
+
+    const existingOrder = await prisma.order.findUnique({
+      where: { id }
+    });
+
+    if (!existingOrder) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found'
+      });
+    }
+
+    const updatedOrder = await prisma.order.update({
+      where: { id },
+      data: {
+        status,
+        notes
+      },
+      include: {
+        customer: true,
+        user: true,
+        items: {
+          include: {
+            product: true
+          }
+        }
+      }
+    });
+
+    // Create audit log
+    await createAuditLog({
+      userId: req.user?.id || 'unknown',
+      action: 'UPDATE',
+      entity: 'ORDER',
+      entityId: id,
+      oldValues: {
+        status: existingOrder.status,
+        notes: existingOrder.notes
+      },
+      newValues: { status, notes },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent')
+    });
+
+    res.json({
+      success: true,
+      data: updatedOrder
+    });
+  } catch (error) {
+    console.error('Update order error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update order'
+    });
+  }
+};
+
+// Delete order
+export const deleteOrder = async (req: Request, res: Response): Promise<Response | void> => {
+  try {
+    const { id } = req.params;
+
+    const existingOrder = await prisma.order.findUnique({
+      where: { id }
+    });
+
+    if (!existingOrder) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found'
+      });
+    }
+
+    // Delete order items first to avoid foreign key constraint
+    await prisma.orderItem.deleteMany({
+      where: { orderId: id }
+    });
+
+    // Then delete the order
+    await prisma.order.delete({
+      where: { id }
+    });
+
+    // Create audit log
+    await createAuditLog({
+      userId: req.user?.id || 'unknown',
+      action: 'DELETE',
+      entity: 'ORDER',
+      entityId: id,
+      oldValues: {
+        customerId: existingOrder.customerId,
+        status: existingOrder.status,
+        type: existingOrder.type
+      },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent')
+    });
+
+    res.json({
+      success: true,
+      message: 'Order deleted successfully'
+    });
+  } catch (error) {
+    console.error('Delete order error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to delete order'
+    });
+  }
+};
+
+// Get orders by status
+export const getOrdersByStatus = async (req: Request, res: Response): Promise<Response | void> => {
+  try {
+    const { status } = req.params;
+
+    const orders = await prisma.order.findMany({
+      where: { status: status as any },
+      include: {
+        customer: true,
+        user: true,
+        items: {
+          include: {
+            product: true
+          }
+        }
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    });
+
+    res.json({
+      success: true,
+      data: orders
+    });
+  } catch (error) {
+    console.error('Get orders by status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch orders'
+    });
+  }
+};
+
+// Get orders by customer
+export const getOrdersByCustomer = async (req: Request, res: Response): Promise<Response | void> => {
+  try {
+    const { customerId } = req.params;
+
+    const orders = await prisma.order.findMany({
+      where: { customerId },
+      include: {
+        customer: true,
+        user: true,
+        items: {
+          include: {
+            product: true
+          }
+        }
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    });
+
+    res.json({
+      success: true,
+      data: orders
+    });
+  } catch (error) {
+    console.error('Get orders by customer error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch orders'
+    });
+  }
+};
+
+// Get orders by date range
+export const getOrdersByDateRange = async (req: Request, res: Response): Promise<Response | void> => {
+  try {
+    const { startDate, endDate } = req.query;
+
+    const orders = await prisma.order.findMany({
+      where: {
+        createdAt: {
+          gte: startDate ? new Date(startDate as string) : undefined,
+          lte: endDate ? new Date(endDate as string) : undefined
+        }
+      },
+      include: {
+        customer: true,
+        user: true,
+        items: {
+          include: {
+            product: true
+          }
+        }
+      },
+      orderBy: {
+        createdAt: 'desc'
+      }
+    });
+
+    res.json({
+      success: true,
+      data: orders
+    });
+  } catch (error) {
+    console.error('Get orders by date range error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch orders'
+    });
+  }
+};
+
+// Update order status
+export const updateOrderStatus = async (req: Request, res: Response): Promise<Response | void> => {
+  try {
+    const { id } = req.params;
+    const { status } = req.body;
+
+    const existingOrder = await prisma.order.findUnique({
+      where: { id },
+      include: {
+        items: {
+          include: {
+            product: true
+          }
+        }
+      }
+    });
+
+    if (!existingOrder) {
+      return res.status(404).json({
+        success: false,
+        message: 'Order not found'
+      });
+    }
+
+    console.log('Updating order status:', {
+      orderId: id,
+      newStatus: status,
+      previousStatus: existingOrder.status,
+      itemsCount: existingOrder.items.length
+    });
+
+    const updatedOrder = await prisma.order.update({
+      where: { id },
+      data: {
+        status
+      },
+      include: {
+        customer: true,
+        user: true,
+        items: {
+          include: {
+            product: true
+          }
+        }
+      }
+    });
+
+    // Update inventory when order status changes to COMPLETED
+    if (status === 'COMPLETED' && existingOrder.status !== 'COMPLETED') {
+      console.log('Order completed - updating inventory...');
+      
+      for (const item of existingOrder.items) {
+        // Get product details to check if it needs inventory tracking
+        const product = await prisma.product.findUnique({
+          where: { id: item.productId },
+          select: {
+            id: true,
+            name: true,
+            type: true,
+            hasInventory: true
+          }
+        });
+
+        if (product && product.type === 'PHYSICAL' && product.hasInventory) {
+          console.log('Updating inventory for completed order item:', {
+            productId: item.productId,
+            productName: product.name,
+            quantity: item.quantity
+          });
+
+          // Check if inventory record exists
+          const existingInventory = await prisma.inventory.findUnique({
+            where: { productId: item.productId }
+          });
+
+          if (existingInventory) {
+            // Update existing inventory (decrease stock)
+            const newQuantity = Math.max(0, existingInventory.quantity - item.quantity);
+            const newAvailable = Math.max(0, existingInventory.available - item.quantity);
+            
+            await prisma.inventory.update({
+              where: { productId: item.productId },
+              data: {
+                quantity: newQuantity,
+                available: newAvailable,
+                lastUpdated: new Date()
+              }
+            });
+
+            // Create inventory movement record
+            await prisma.inventoryMovement.create({
+              data: {
+                productId: item.productId,
+                type: 'SALE',
+                quantity: -item.quantity, // Negative for sales
+                previousQuantity: existingInventory.quantity,
+                newQuantity: newQuantity,
+                reason: `Order ${existingOrder.orderNumber} completed - Stock decrease`,
+                reference: `ORD-${existingOrder.orderNumber}`,
+                userId: req.user?.id || 'unknown'
+              }
+            });
+
+            console.log('Inventory updated for product:', product.name, 'New quantity:', newQuantity);
+          } else {
+            console.log('No inventory record found for product:', product.name);
+          }
+        }
+      }
+    }
+
+    // Create audit log
+    await createAuditLog({
+      userId: req.user?.id || 'unknown',
+      action: 'UPDATE',
+      entity: 'ORDER',
+      entityId: id,
+      oldValues: {
+        status: existingOrder.status
+      },
+      newValues: { status },
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent')
+    });
+
+    res.json({
+      success: true,
+      data: updatedOrder
+    });
+  } catch (error) {
+    console.error('Update order status error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to update order status'
+    });
+  }
+}; 
