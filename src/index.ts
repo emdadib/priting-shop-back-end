@@ -80,10 +80,13 @@ app.use(helmet());
 app.use(cors({
   origin: [
     process.env.CLIENT_URL || "http://localhost:3000",
-    "https://your-frontend-domain.vercel.app",
-    "https://your-frontend-domain.netlify.app"
+    "https://sbprinters.xyz",
+    "https://sbprinters.netlify.app",
+    "http://localhost:3000"
   ],
-  credentials: true
+  credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With']
 }));
 app.use(compression());
 app.use(morgan('combined'));
