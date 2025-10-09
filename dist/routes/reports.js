@@ -29,6 +29,11 @@ router.get('/financial', [
     (0, express_validator_1.query)('endDate').optional().isISO8601().withMessage('End date must be a valid date'),
     validation_1.validateRequest
 ], reportController_1.getFinancialReport);
+router.get('/profit', [
+    (0, express_validator_1.query)('startDate').optional().isISO8601().withMessage('Start date must be a valid date'),
+    (0, express_validator_1.query)('endDate').optional().isISO8601().withMessage('End date must be a valid date'),
+    validation_1.validateRequest
+], reportController_1.getProfitReport);
 router.get('/staff', [
     (0, express_validator_1.query)('startDate').optional().isISO8601().withMessage('Start date must be a valid date'),
     (0, express_validator_1.query)('endDate').optional().isISO8601().withMessage('End date must be a valid date'),

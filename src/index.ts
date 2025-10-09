@@ -78,7 +78,11 @@ const speedLimiter = slowDown({
 // Middleware
 app.use(helmet());
 app.use(cors({
-  origin: process.env.CLIENT_URL || "http://localhost:3000",
+  origin: [
+    process.env.CLIENT_URL || "http://localhost:3000",
+    "https://your-frontend-domain.vercel.app",
+    "https://your-frontend-domain.netlify.app"
+  ],
   credentials: true
 }));
 app.use(compression());

@@ -51,6 +51,10 @@ router.post('/', [
     (0, express_validator_1.body)('unit').optional().isString().withMessage('Unit must be a string'),
     (0, express_validator_1.body)('weight').optional().isFloat({ min: 0 }).withMessage('Weight must be a positive number'),
     (0, express_validator_1.body)('barcode').optional().isString().withMessage('Barcode must be a string'),
+    (0, express_validator_1.body)('hasWarranty').optional().isBoolean().withMessage('hasWarranty must be a boolean'),
+    (0, express_validator_1.body)('warrantyPeriod').optional().isInt({ min: 0 }).withMessage('Warranty period must be a non-negative integer'),
+    (0, express_validator_1.body)('warrantyPeriodType').optional().isIn(['SIX_MONTHS', 'ONE_YEAR', 'TWO_YEARS', 'THREE_YEARS', 'FIVE_YEARS', 'LIFETIME', 'CUSTOM']).withMessage('Invalid warranty period type'),
+    (0, express_validator_1.body)('warrantyDescription').optional().isString().withMessage('Warranty description must be a string'),
     validation_1.validateRequest
 ], productController_1.createProduct);
 router.put('/:id', [
@@ -76,6 +80,10 @@ router.put('/:id', [
     (0, express_validator_1.body)('maxStock').optional().isInt({ min: 0 }).withMessage('Maximum stock must be a non-negative integer'),
     (0, express_validator_1.body)('unit').optional().isString().withMessage('Unit must be a string'),
     (0, express_validator_1.body)('isActive').optional().isBoolean().withMessage('isActive must be a boolean'),
+    (0, express_validator_1.body)('hasWarranty').optional().isBoolean().withMessage('hasWarranty must be a boolean'),
+    (0, express_validator_1.body)('warrantyPeriod').optional().isInt({ min: 0 }).withMessage('Warranty period must be a non-negative integer'),
+    (0, express_validator_1.body)('warrantyPeriodType').optional().isIn(['SIX_MONTHS', 'ONE_YEAR', 'TWO_YEARS', 'THREE_YEARS', 'FIVE_YEARS', 'LIFETIME', 'CUSTOM']).withMessage('Invalid warranty period type'),
+    (0, express_validator_1.body)('warrantyDescription').optional().isString().withMessage('Warranty description must be a string'),
     validation_1.validateRequest
 ], productController_1.updateProduct);
 router.delete('/:id', auth_1.requireManager, productController_1.deleteProduct);

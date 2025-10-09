@@ -34,6 +34,11 @@ const accounting_1 = __importDefault(require("./routes/accounting"));
 const warranties_1 = __importDefault(require("./routes/warranties"));
 const permissions_1 = __importDefault(require("./routes/permissions"));
 const supplierPayments_1 = __importDefault(require("./routes/supplierPayments"));
+const photocopy_1 = __importDefault(require("./routes/photocopy"));
+const loans_1 = __importDefault(require("./routes/loans"));
+const salaries_1 = __importDefault(require("./routes/salaries"));
+const salaryAdvances_1 = __importDefault(require("./routes/salaryAdvances"));
+const improvedSalary_1 = __importDefault(require("./routes/improvedSalary"));
 const errorHandler_1 = require("./middleware/errorHandler");
 const notFound_1 = require("./middleware/notFound");
 const auth_2 = require("./middleware/auth");
@@ -50,13 +55,15 @@ const io = new socket_io_1.Server(server, {
 const PORT = process.env.PORT || 3001;
 const limiter = (0, express_rate_limit_1.default)({
     windowMs: 15 * 60 * 1000,
-    max: 100,
-    message: 'Too many requests from this IP, please try again later.'
+    max: 1000,
+    message: 'Too many requests from this IP, please try again later.',
+    standardHeaders: true,
+    legacyHeaders: false,
 });
 const speedLimiter = (0, express_slow_down_1.default)({
     windowMs: 15 * 60 * 1000,
-    delayAfter: 50,
-    delayMs: () => 500
+    delayAfter: 200,
+    delayMs: () => 200
 });
 app.use((0, helmet_1.default)());
 app.use((0, cors_1.default)({
@@ -96,6 +103,11 @@ app.use('/api/reports', auth_2.authenticateToken, reports_1.default);
 app.use('/api/settings', auth_2.authenticateToken, settings_1.default);
 app.use('/api/warranties', auth_2.authenticateToken, warranties_1.default);
 app.use('/api/permissions', permissions_1.default);
+app.use('/api/photocopy', photocopy_1.default);
+app.use('/api/loans', loans_1.default);
+app.use('/api/salaries', auth_2.authenticateToken, salaries_1.default);
+app.use('/api/salary-advances', auth_2.authenticateToken, salaryAdvances_1.default);
+app.use('/api/improved-salary', improvedSalary_1.default);
 io.on('connection', (socket) => {
     console.log('Client connected:', socket.id);
     socket.on('join-user', (userId) => {

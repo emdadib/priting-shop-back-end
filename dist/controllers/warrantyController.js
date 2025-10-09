@@ -174,25 +174,34 @@ const createWarranty = async (req, res) => {
                 message: 'This product does not have warranty coverage'
             });
         }
-        const order = await prisma.order.findUnique({
-            where: { id: orderId },
-            select: { createdAt: true }
+        const orderItem = await prisma.orderItem.findFirst({
+            where: {
+                orderId: orderId,
+                productId: productId
+            },
+            select: {
+                warrantyStartDate: true,
+                warrantyEndDate: true,
+                serialNumbers: true
+            }
         });
-        if (!order) {
+        if (!orderItem) {
             return res.status(404).json({
                 success: false,
-                message: 'Order not found'
+                message: 'Order item not found'
             });
         }
-        if (product.warrantyPeriod) {
-            const warrantyExpiryDate = new Date(order.createdAt);
-            warrantyExpiryDate.setDate(warrantyExpiryDate.getDate() + product.warrantyPeriod);
-            if (new Date() > warrantyExpiryDate) {
-                return res.status(400).json({
-                    success: false,
-                    message: `Warranty has expired. Warranty period was ${product.warrantyPeriod} days from order date.`
-                });
-            }
+        if (orderItem.warrantyEndDate && new Date() > new Date(orderItem.warrantyEndDate)) {
+            return res.status(400).json({
+                success: false,
+                message: `Warranty has expired. Warranty period ended on ${new Date(orderItem.warrantyEndDate).toLocaleDateString()}.`
+            });
+        }
+        if (orderItem.warrantyStartDate && new Date() < new Date(orderItem.warrantyStartDate)) {
+            return res.status(400).json({
+                success: false,
+                message: `Warranty has not started yet. Warranty period begins on ${new Date(orderItem.warrantyStartDate).toLocaleDateString()}.`
+            });
         }
         const warranty = await prisma.warranty.create({
             data: {
@@ -202,7 +211,7 @@ const createWarranty = async (req, res) => {
                 warrantyNumber,
                 issueDescription,
                 priority,
-                notes,
+                notes: `${notes || ''}${orderItem.serialNumbers ? `\nSerial Numbers: ${orderItem.serialNumbers}` : ''}`,
                 createdBy: userId,
                 status: 'OPEN'
             },

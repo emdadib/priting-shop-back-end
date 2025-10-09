@@ -146,7 +146,10 @@ const createOrder = async (req, res) => {
                         taxAmount: item.taxAmount || 0,
                         total: item.total,
                         notes: item.notes,
-                        specifications: item.specifications
+                        specifications: item.specifications,
+                        serialNumbers: item.serialNumbers || null,
+                        warrantyStartDate: item.warrantyStartDate ? new Date(item.warrantyStartDate) : null,
+                        warrantyEndDate: item.warrantyEndDate ? new Date(item.warrantyEndDate) : null
                     }))
                 }
             },

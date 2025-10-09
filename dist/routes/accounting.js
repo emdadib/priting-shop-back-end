@@ -16,5 +16,14 @@ router.get('/company/ledger', accountingController_1.getCompanyLedger);
 router.post('/company/transactions', accountingController_1.addCompanyTransaction);
 router.get('/summary', accountingController_1.getAccountingSummary);
 router.get('/aging-report', accountingController_1.getAgingReport);
+router.get('/expenses', accountingController_1.getExpenses);
+router.post('/expenses', accountingController_1.addExpense);
+router.put('/expenses/:id', accountingController_1.updateExpense);
+router.delete('/expenses/:id', accountingController_1.deleteExpense);
+router.get('/expense-summary', accountingController_1.getExpenseSummary);
+router.get('/expense-categories', accountingController_1.getExpenseCategories);
+router.post('/expense-categories', accountingController_1.addExpenseCategory);
+router.put('/expense-categories/:id', accountingController_1.updateExpenseCategory);
+router.delete('/expense-categories/:id', accountingController_1.deleteExpenseCategory);
 exports.default = router;
 //# sourceMappingURL=accounting.js.map

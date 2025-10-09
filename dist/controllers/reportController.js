@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getDashboardStats = exports.getStaffReport = exports.getFinancialReport = exports.getCustomerReport = exports.getInventoryReport = exports.getSalesReport = void 0;
+exports.getDashboardStats = exports.getStaffReport = exports.getProfitReport = exports.getFinancialReport = exports.getCustomerReport = exports.getInventoryReport = exports.getSalesReport = void 0;
 const client_1 = require("@prisma/client");
 const prisma = new client_1.PrismaClient();
 const getSalesReport = async (req, res) => {
@@ -163,6 +163,121 @@ const getFinancialReport = async (req, res) => {
     }
 };
 exports.getFinancialReport = getFinancialReport;
+const getProfitReport = async (req, res) => {
+    try {
+        const { startDate, endDate } = req.query;
+        const orders = await prisma.order.findMany({
+            where: {
+                status: 'COMPLETED',
+                createdAt: {
+                    gte: startDate ? new Date(startDate) : undefined,
+                    lte: endDate ? new Date(endDate) : undefined
+                }
+            },
+            include: {
+                items: {
+                    include: {
+                        product: {
+                            select: {
+                                id: true,
+                                name: true,
+                                basePrice: true,
+                                baseCostPrice: true,
+                                sku: true
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        let totalRevenue = 0;
+        let totalCost = 0;
+        let totalProfit = 0;
+        const profitByProduct = [];
+        const profitByOrder = [];
+        orders.forEach(order => {
+            let orderRevenue = 0;
+            let orderCost = 0;
+            let orderProfit = 0;
+            order.items.forEach(item => {
+                const itemRevenue = Number(item.total);
+                const itemCost = Number(item.product.baseCostPrice) * Number(item.quantity);
+                const itemProfit = itemRevenue - itemCost;
+                orderRevenue += itemRevenue;
+                orderCost += itemCost;
+                orderProfit += itemProfit;
+                const existingProduct = profitByProduct.find(p => p.productId === item.product.id);
+                if (existingProduct) {
+                    existingProduct.revenue += itemRevenue;
+                    existingProduct.cost += itemCost;
+                    existingProduct.profit += itemProfit;
+                    existingProduct.quantity += Number(item.quantity);
+                }
+                else {
+                    profitByProduct.push({
+                        productId: item.product.id,
+                        productName: item.product.name,
+                        sku: item.product.sku,
+                        revenue: itemRevenue,
+                        cost: itemCost,
+                        profit: itemProfit,
+                        quantity: Number(item.quantity),
+                        margin: itemRevenue > 0 ? ((itemProfit / itemRevenue) * 100) : 0
+                    });
+                }
+            });
+            totalRevenue += orderRevenue;
+            totalCost += orderCost;
+            totalProfit += orderProfit;
+            profitByOrder.push({
+                orderId: order.id,
+                orderNumber: order.orderNumber,
+                revenue: orderRevenue,
+                cost: orderCost,
+                profit: orderProfit,
+                margin: orderRevenue > 0 ? ((orderProfit / orderRevenue) * 100) : 0,
+                itemCount: order.items.length,
+                createdAt: order.createdAt
+            });
+        });
+        profitByProduct.sort((a, b) => b.profit - a.profit);
+        profitByOrder.sort((a, b) => b.profit - a.profit);
+        const overallMargin = totalRevenue > 0 ? ((totalProfit / totalRevenue) * 100) : 0;
+        res.json({
+            success: true,
+            data: {
+                summary: {
+                    totalRevenue,
+                    totalCost,
+                    totalProfit,
+                    overallMargin,
+                    orderCount: orders.length,
+                    averageOrderProfit: orders.length > 0 ? totalProfit / orders.length : 0,
+                    averageOrderMargin: orders.length > 0 ?
+                        orders.reduce((sum, order) => {
+                            const orderRevenue = order.items.reduce((itemSum, item) => itemSum + Number(item.total), 0);
+                            const orderCost = order.items.reduce((itemSum, item) => itemSum + (Number(item.product.baseCostPrice) * Number(item.quantity)), 0);
+                            return sum + (orderRevenue > 0 ? ((orderRevenue - orderCost) / orderRevenue) * 100 : 0);
+                        }, 0) / orders.length : 0
+                },
+                profitByProduct: profitByProduct.slice(0, 20),
+                profitByOrder: profitByOrder.slice(0, 50),
+                period: {
+                    startDate: startDate || null,
+                    endDate: endDate || null
+                }
+            }
+        });
+    }
+    catch (error) {
+        console.error('Get profit report error:', error);
+        res.status(500).json({
+            success: false,
+            message: 'Failed to generate profit report'
+        });
+    }
+};
+exports.getProfitReport = getProfitReport;
 const getStaffReport = async (req, res) => {
     try {
         const { startDate, endDate } = req.query;
