@@ -24,7 +24,25 @@ const generateTokens = (userId: string) => {
 // Login controller
 export const login = async (req: Request, res: Response): Promise<Response | void> => {
   try {
+    // Check if JWT_SECRET is configured
+    if (!process.env.JWT_SECRET) {
+      console.error('JWT_SECRET is not configured!');
+      return res.status(500).json({
+        success: false,
+        message: 'Server configuration error. Please contact administrator.'
+      });
+    }
+
     const { email, password } = req.body;
+
+    if (!email || !password) {
+      return res.status(400).json({
+        success: false,
+        message: 'Email and password are required'
+      });
+    }
+
+    console.log('Login attempt:', { email, timestamp: new Date().toISOString() });
 
     // Find user by email
     const user = await prisma.user.findUnique({
@@ -42,16 +60,26 @@ export const login = async (req: Request, res: Response): Promise<Response | voi
       }
     });
 
-    if (!user || !user.isActive) {
+    if (!user) {
+      console.log('Login failed: User not found', { email });
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
       });
     }
 
+    if (!user.isActive) {
+      console.log('Login failed: User inactive', { email, userId: user.id });
+      return res.status(401).json({
+        success: false,
+        message: 'Account is inactive. Please contact administrator.'
+      });
+    }
+
     // Check password
     const isPasswordValid = await bcrypt.compare(password, user.password);
     if (!isPasswordValid) {
+      console.log('Login failed: Invalid password', { email, userId: user.id });
       return res.status(401).json({
         success: false,
         message: 'Invalid credentials'
@@ -92,11 +120,26 @@ export const login = async (req: Request, res: Response): Promise<Response | voi
         refreshToken
       }
     });
-  } catch (error) {
-    console.error('Login error:', error);
+  } catch (error: any) {
+    console.error('Login error:', {
+      message: error.message,
+      stack: error.stack,
+      email: req.body?.email
+    });
+    
+    // Handle specific Prisma errors
+    if (error.code === 'P1001') {
+      return res.status(500).json({
+        success: false,
+        message: 'Database connection error. Please try again later.'
+      });
+    }
+
     res.status(500).json({
       success: false,
-      message: 'Login failed'
+      message: process.env.NODE_ENV === 'production' 
+        ? 'Login failed. Please try again.'
+        : error.message || 'Login failed'
     });
   }
 };
