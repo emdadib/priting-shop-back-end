@@ -28,7 +28,7 @@ const router = express.Router();
 // Product routes
 router.get('/', [
   query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
-  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+  query('limit').optional().isInt({ min: 1, max: 1000 }).withMessage('Limit must be between 1 and 1000'),
   query('search').optional().isString().withMessage('Search must be a string'),
   query('category').optional().isString().withMessage('Category must be a string'),
   query('type').optional().isIn(['PHYSICAL', 'SERVICE', 'DIGITAL']).withMessage('Invalid product type'),

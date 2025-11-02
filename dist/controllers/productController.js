@@ -350,7 +350,30 @@ const getProductSummary = async (req, res) => {
 exports.getProductSummary = getProductSummary;
 const createProduct = async (req, res) => {
     try {
+        console.log('Create product request received:', {
+            body: req.body,
+            user: req.user?.id,
+            role: req.user?.role
+        });
         const { name, description, sku, barcode, categoryId, type, basePrice, baseCostPrice, taxRate = 0, isService = false, hasInventory = true, minStock = 0, maxStock, unit = 'piece', weight, dimensions, imageUrl, specifications } = req.body;
+        if (!name || !sku || !categoryId || !type) {
+            return res.status(400).json({
+                success: false,
+                message: 'Missing required fields: name, sku, categoryId, and type are required'
+            });
+        }
+        if (basePrice === undefined || basePrice === null) {
+            return res.status(400).json({
+                success: false,
+                message: 'Base price is required'
+            });
+        }
+        if (baseCostPrice === undefined || baseCostPrice === null) {
+            return res.status(400).json({
+                success: false,
+                message: 'Base cost price is required'
+            });
+        }
         const existingProduct = await index_1.prisma.product.findUnique({
             where: { sku }
         });
@@ -360,9 +383,10 @@ const createProduct = async (req, res) => {
                 message: 'Product with this SKU already exists'
             });
         }
-        if (barcode) {
+        const normalizedBarcode = barcode && barcode.trim() !== '' ? barcode.trim() : null;
+        if (normalizedBarcode) {
             const existingBarcode = await index_1.prisma.product.findUnique({
-                where: { barcode }
+                where: { barcode: normalizedBarcode }
             });
             if (existingBarcode) {
                 return res.status(400).json({
@@ -371,12 +395,27 @@ const createProduct = async (req, res) => {
                 });
             }
         }
+        const category = await index_1.prisma.category.findUnique({
+            where: { id: categoryId }
+        });
+        if (!category) {
+            return res.status(400).json({
+                success: false,
+                message: 'Invalid category. Please select a valid category.'
+            });
+        }
+        if (!category.isActive) {
+            return res.status(400).json({
+                success: false,
+                message: 'The selected category is inactive. Please select an active category.'
+            });
+        }
         const product = await index_1.prisma.product.create({
             data: {
                 name,
                 description,
                 sku,
-                barcode,
+                barcode: normalizedBarcode,
                 categoryId,
                 type,
                 basePrice,
@@ -427,9 +466,59 @@ const createProduct = async (req, res) => {
     }
     catch (error) {
         console.error('Create product error:', error);
+        if (error.code) {
+            switch (error.code) {
+                case 'P2002':
+                    const target = error.meta?.target;
+                    if (target && target.includes('sku')) {
+                        return res.status(400).json({
+                            success: false,
+                            message: 'Product with this SKU already exists'
+                        });
+                    }
+                    if (target && target.includes('barcode')) {
+                        return res.status(400).json({
+                            success: false,
+                            message: 'Product with this barcode already exists'
+                        });
+                    }
+                    return res.status(400).json({
+                        success: false,
+                        message: 'A product with these details already exists'
+                    });
+                case 'P2003':
+                    if (error.meta?.field_name?.includes('categoryId')) {
+                        return res.status(400).json({
+                            success: false,
+                            message: 'Invalid category. Please select a valid category.'
+                        });
+                    }
+                    return res.status(400).json({
+                        success: false,
+                        message: 'Invalid reference. Please check your input data.'
+                    });
+                case 'P2012':
+                    return res.status(400).json({
+                        success: false,
+                        message: error.meta?.reason || 'Required fields are missing'
+                    });
+                default:
+                    console.error('Prisma error code:', error.code, error);
+            }
+        }
+        if (error.name === 'ValidationError') {
+            return res.status(400).json({
+                success: false,
+                message: error.message || 'Validation failed'
+            });
+        }
+        const errorMessage = process.env.NODE_ENV === 'production'
+            ? 'Failed to create product. Please check your input and try again.'
+            : error.message || 'Failed to create product';
         res.status(500).json({
             success: false,
-            message: 'Failed to create product'
+            message: errorMessage,
+            ...(process.env.NODE_ENV !== 'production' && { error: error.message, stack: error.stack })
         });
     }
 };
