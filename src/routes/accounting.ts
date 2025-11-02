@@ -16,7 +16,11 @@ import {
   getExpenseCategories,
   addExpenseCategory,
   updateExpenseCategory,
-  deleteExpenseCategory
+  deleteExpenseCategory,
+  depositProfit,
+  withdrawProfit,
+  getProfitSummary,
+  calculateAndRecordProfit
 } from '../controllers/accountingController';
 import { authenticateToken } from '../middleware/auth';
 
@@ -53,5 +57,11 @@ router.get('/expense-categories', getExpenseCategories);
 router.post('/expense-categories', addExpenseCategory);
 router.put('/expense-categories/:id', updateExpenseCategory);
 router.delete('/expense-categories/:id', deleteExpenseCategory);
+
+// Profit management routes
+router.post('/profit/deposit', depositProfit);
+router.post('/profit/withdraw', withdrawProfit);
+router.get('/profit/summary', getProfitSummary);
+router.post('/profit/calculate', calculateAndRecordProfit); // Calculate profit from sales automatically
 
 export default router;

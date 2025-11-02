@@ -58,7 +58,11 @@ const io = new Server(server, {
   }
 });
 
-const PORT = process.env.PORT || 3001;
+// Cloud Run uses PORT environment variable, default to 8080 for production
+const PORT = process.env.PORT || (process.env.NODE_ENV === 'production' ? 8080 : 3001);
+
+// Trust proxy - Required for Cloud Run and proper rate limiting behind proxies
+app.set('trust proxy', true);
 
 // Rate limiting - More lenient for development
 const limiter = rateLimit({

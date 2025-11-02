@@ -9,13 +9,13 @@ const generateTokens = (userId: string) => {
   const accessToken = jwt.sign(
     { id: userId },
     process.env.JWT_SECRET!,
-    { expiresIn: '15m' }
+    { expiresIn: '8h' } // Extended from 15m to 8 hours
   );
 
   const refreshToken = jwt.sign(
     { id: userId },
-    process.env.JWT_SECRET!,
-    { expiresIn: '7d' }
+    process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET!, // Use JWT_REFRESH_SECRET if available, fallback to JWT_SECRET
+    { expiresIn: '30d' } // Extended from 7d to 30 days
   );
 
   return { accessToken, refreshToken };
@@ -226,8 +226,9 @@ export const refreshToken = async (req: Request, res: Response): Promise<Respons
       });
     }
 
-    // Verify refresh token
-    const decoded = jwt.verify(refreshToken, process.env.JWT_REFRESH_SECRET!) as any;
+    // Verify refresh token (use JWT_REFRESH_SECRET if available, otherwise fallback to JWT_SECRET)
+    const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET!;
+    const decoded = jwt.verify(refreshToken, refreshSecret) as any;
     
     // Check if user exists and is active
     const user = await prisma.user.findUnique({
