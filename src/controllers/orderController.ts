@@ -91,52 +91,8 @@ export const createOrder = async (req: Request, res: Response): Promise<Response
     // Handle walk-in customers
     let finalCustomerId = customerId;
     if (customerId === 'walk-in') {
-      // First, try to find an existing walk-in customer
-      let walkInCustomer = await prisma.customer.findFirst({
-        where: {
-          isWalkIn: true,
-          phone: '',
-          firstName: 'Walk-in',
-          lastName: 'Customer'
-        }
-      });
-
-      // If no walk-in customer exists, create one
-      if (!walkInCustomer) {
-        // Generate a unique email that won't conflict with existing records
-        let email = `walkin@temp.com`;
-        let emailExists = true;
-        let attempt = 0;
-        
-        // Try to find an available email (unlikely to conflict, but handle it)
-        while (emailExists && attempt < 10) {
-          const existing = await prisma.customer.findUnique({
-            where: { email }
-          });
-          if (!existing) {
-            emailExists = false;
-          } else {
-            email = `walkin-${attempt}@temp.com`;
-            attempt++;
-          }
-        }
-
-        walkInCustomer = await prisma.customer.create({
-          data: {
-            firstName: 'Walk-in',
-            lastName: 'Customer',
-            email: email,
-            phone: '',
-            address: '',
-            isActive: true,
-            isWalkIn: true
-          }
-        });
-        console.log('Created new walk-in customer:', walkInCustomer.id);
-      } else {
-        console.log('Reusing existing walk-in customer:', walkInCustomer.id);
-      }
-      
+      const { getOrCreateWalkInCustomer } = await import('../utils/walkInCustomer');
+      const walkInCustomer = await getOrCreateWalkInCustomer();
       finalCustomerId = walkInCustomer.id;
     }
 

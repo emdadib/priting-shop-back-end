@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.deleteExpenseCategory = exports.updateExpenseCategory = exports.addExpenseCategory = exports.getExpenseCategories = exports.getExpenseSummary = exports.deleteExpense = exports.updateExpense = exports.addExpense = exports.getExpenses = exports.getAgingReport = exports.getAccountingSummary = exports.addCompanyTransaction = exports.addSupplierTransaction = exports.addCustomerTransaction = exports.getCompanyLedger = exports.getSupplierLedger = exports.getCustomerLedger = void 0;
+exports.getProfitSummary = exports.calculateAndRecordProfit = exports.withdrawProfit = exports.depositProfit = exports.deleteExpenseCategory = exports.updateExpenseCategory = exports.addExpenseCategory = exports.getExpenseCategories = exports.getExpenseSummary = exports.deleteExpense = exports.updateExpense = exports.addExpense = exports.getExpenses = exports.getAgingReport = exports.getAccountingSummary = exports.addCompanyTransaction = exports.addSupplierTransaction = exports.addCustomerTransaction = exports.getCompanyLedger = exports.getSupplierLedger = exports.getCustomerLedger = void 0;
 const client_1 = require("@prisma/client");
 const prisma = new client_1.PrismaClient();
 const getCustomerLedger = async (req, res) => {
@@ -693,4 +693,402 @@ const deleteExpenseCategory = async (req, res) => {
     }
 };
 exports.deleteExpenseCategory = deleteExpenseCategory;
+const depositProfit = async (req, res) => {
+    try {
+        const { amount, accountType, description, reference, date, profitType = 'PROFIT' } = req.body;
+        if (!amount || amount <= 0) {
+            return res.status(400).json({ error: 'Amount must be greater than 0' });
+        }
+        if (!accountType || (accountType !== 'CASH' && accountType !== 'BANK')) {
+            return res.status(400).json({ error: 'Account type must be CASH or BANK' });
+        }
+        const transactionDate = date ? new Date(date) : new Date();
+        const profitDescription = description || `${profitType === 'INVESTOR_PROFIT' ? 'Investor Profit' : 'Profit'} Deposit`;
+        const transactionReference = reference || `PROFIT-${Date.now()}`;
+        const result = await prisma.$transaction(async (tx) => {
+            const cashTransaction = await tx.companyTransaction.create({
+                data: {
+                    accountType: accountType,
+                    type: 'DEBIT',
+                    amount: parseFloat(amount),
+                    description: `${profitDescription} - Cash Deposit`,
+                    reference: transactionReference,
+                    referenceType: 'ADJUSTMENT',
+                    date: transactionDate,
+                    isActive: true
+                }
+            });
+            const equityTransaction = await tx.companyTransaction.create({
+                data: {
+                    accountType: 'EQUITY',
+                    type: 'CREDIT',
+                    amount: parseFloat(amount),
+                    description: `${profitDescription} - Equity Increase`,
+                    reference: transactionReference,
+                    referenceType: 'ADJUSTMENT',
+                    referenceId: cashTransaction.id,
+                    date: transactionDate,
+                    isActive: true
+                }
+            });
+            return {
+                cashTransaction,
+                equityTransaction
+            };
+        });
+        return res.status(201).json({
+            success: true,
+            message: 'Profit deposited successfully',
+            data: result
+        });
+    }
+    catch (error) {
+        console.error('Error depositing profit:', error);
+        return res.status(500).json({ error: 'Failed to deposit profit' });
+    }
+};
+exports.depositProfit = depositProfit;
+const withdrawProfit = async (req, res) => {
+    try {
+        const { amount, accountType, description, reference, date, profitType = 'PROFIT' } = req.body;
+        if (!amount || amount <= 0) {
+            return res.status(400).json({ error: 'Amount must be greater than 0' });
+        }
+        if (!accountType || (accountType !== 'CASH' && accountType !== 'BANK')) {
+            return res.status(400).json({ error: 'Account type must be CASH or BANK' });
+        }
+        const equityTransactions = await prisma.companyTransaction.findMany({
+            where: {
+                isActive: true,
+                accountType: 'EQUITY'
+            }
+        });
+        const equityBalance = equityTransactions.reduce((balance, transaction) => {
+            const amount = Number(transaction.amount);
+            if (transaction.type === 'CREDIT') {
+                return balance + amount;
+            }
+            else {
+                return balance - amount;
+            }
+        }, 0);
+        const withdrawalAmount = parseFloat(amount);
+        if (withdrawalAmount > equityBalance) {
+            return res.status(400).json({
+                error: `Insufficient equity balance. Available: ${equityBalance.toFixed(2)}, Requested: ${withdrawalAmount.toFixed(2)}`
+            });
+        }
+        const transactionDate = date ? new Date(date) : new Date();
+        const profitDescription = description || `${profitType === 'INVESTOR_PROFIT' ? 'Investor Profit' : 'Profit'} Withdrawal`;
+        const transactionReference = reference || `WITHDRAW-${Date.now()}`;
+        const result = await prisma.$transaction(async (tx) => {
+            const cashTransaction = await tx.companyTransaction.create({
+                data: {
+                    accountType: accountType,
+                    type: 'CREDIT',
+                    amount: parseFloat(amount),
+                    description: `${profitDescription} - Cash Withdrawal`,
+                    reference: transactionReference,
+                    referenceType: 'ADJUSTMENT',
+                    date: transactionDate,
+                    isActive: true
+                }
+            });
+            const equityTransaction = await tx.companyTransaction.create({
+                data: {
+                    accountType: 'EQUITY',
+                    type: 'DEBIT',
+                    amount: parseFloat(amount),
+                    description: `${profitDescription} - Equity Decrease`,
+                    reference: transactionReference,
+                    referenceType: 'ADJUSTMENT',
+                    referenceId: cashTransaction.id,
+                    date: transactionDate,
+                    isActive: true
+                }
+            });
+            return {
+                cashTransaction,
+                equityTransaction
+            };
+        });
+        return res.status(201).json({
+            success: true,
+            message: 'Profit withdrawn successfully',
+            data: result
+        });
+    }
+    catch (error) {
+        console.error('Error withdrawing profit:', error);
+        return res.status(500).json({ error: 'Failed to withdraw profit' });
+    }
+};
+exports.withdrawProfit = withdrawProfit;
+const calculateAndRecordProfit = async (req, res) => {
+    try {
+        const { startDate, endDate, description } = req.body;
+        if (!startDate || !endDate) {
+            return res.status(400).json({ error: 'Start date and end date are required' });
+        }
+        const periodStart = new Date(startDate);
+        const periodEnd = new Date(endDate);
+        periodEnd.setHours(23, 59, 59, 999);
+        const salesTransactions = await prisma.companyTransaction.findMany({
+            where: {
+                accountType: 'SALES',
+                type: 'CREDIT',
+                isActive: true,
+                date: {
+                    gte: periodStart,
+                    lte: periodEnd
+                }
+            }
+        });
+        const totalRevenue = salesTransactions.reduce((sum, t) => sum + Number(t.amount), 0);
+        const completedOrders = await prisma.order.findMany({
+            where: {
+                status: 'COMPLETED',
+                createdAt: {
+                    gte: periodStart,
+                    lte: periodEnd
+                }
+            },
+            include: {
+                items: {
+                    include: {
+                        product: {
+                            select: {
+                                baseCostPrice: true
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        let totalCOGS = 0;
+        completedOrders.forEach(order => {
+            order.items.forEach(item => {
+                const itemCost = Number(item.product.baseCostPrice) * Number(item.quantity);
+                totalCOGS += itemCost;
+            });
+        });
+        const expenseTransactions = await prisma.companyTransaction.findMany({
+            where: {
+                accountType: 'EXPENSES',
+                type: 'DEBIT',
+                isActive: true,
+                date: {
+                    gte: periodStart,
+                    lte: periodEnd
+                }
+            }
+        });
+        const totalExpenses = expenseTransactions.reduce((sum, t) => sum + Number(t.amount), 0);
+        const netProfit = totalRevenue - totalCOGS - totalExpenses;
+        if (netProfit !== 0) {
+            const profitDescription = description || `Period Profit/Loss ${periodStart.toISOString().split('T')[0]} to ${periodEnd.toISOString().split('T')[0]}`;
+            const transactionReference = `PROFIT-CALC-${Date.now()}`;
+            const transactionDate = new Date();
+            await prisma.$transaction(async (tx) => {
+                if (netProfit > 0) {
+                    await tx.companyTransaction.create({
+                        data: {
+                            accountType: 'SALES',
+                            type: 'DEBIT',
+                            amount: totalRevenue,
+                            description: `${profitDescription} - Close Sales Revenue`,
+                            reference: transactionReference,
+                            referenceType: 'ADJUSTMENT',
+                            date: transactionDate,
+                            isActive: true
+                        }
+                    });
+                    if (totalCOGS > 0) {
+                        await tx.companyTransaction.create({
+                            data: {
+                                accountType: 'EXPENSES',
+                                type: 'DEBIT',
+                                amount: totalCOGS,
+                                description: `${profitDescription} - Cost of Goods Sold`,
+                                reference: transactionReference,
+                                referenceType: 'ADJUSTMENT',
+                                date: transactionDate,
+                                isActive: true
+                            }
+                        });
+                    }
+                    await tx.companyTransaction.create({
+                        data: {
+                            accountType: 'EQUITY',
+                            type: 'CREDIT',
+                            amount: netProfit,
+                            description: `${profitDescription} - Net Profit`,
+                            reference: transactionReference,
+                            referenceType: 'ADJUSTMENT',
+                            date: transactionDate,
+                            isActive: true
+                        }
+                    });
+                }
+                else {
+                    await tx.companyTransaction.create({
+                        data: {
+                            accountType: 'SALES',
+                            type: 'DEBIT',
+                            amount: totalRevenue,
+                            description: `${profitDescription} - Close Sales Revenue`,
+                            reference: transactionReference,
+                            referenceType: 'ADJUSTMENT',
+                            date: transactionDate,
+                            isActive: true
+                        }
+                    });
+                    if (totalCOGS > 0) {
+                        await tx.companyTransaction.create({
+                            data: {
+                                accountType: 'EXPENSES',
+                                type: 'DEBIT',
+                                amount: totalCOGS,
+                                description: `${profitDescription} - Cost of Goods Sold`,
+                                reference: transactionReference,
+                                referenceType: 'ADJUSTMENT',
+                                date: transactionDate,
+                                isActive: true
+                            }
+                        });
+                    }
+                    await tx.companyTransaction.create({
+                        data: {
+                            accountType: 'EQUITY',
+                            type: 'DEBIT',
+                            amount: Math.abs(netProfit),
+                            description: `${profitDescription} - Net Loss`,
+                            reference: transactionReference,
+                            referenceType: 'ADJUSTMENT',
+                            date: transactionDate,
+                            isActive: true
+                        }
+                    });
+                }
+            });
+            return res.json({
+                success: true,
+                message: 'Profit calculated and recorded successfully',
+                data: {
+                    period: {
+                        startDate: periodStart,
+                        endDate: periodEnd
+                    },
+                    calculation: {
+                        totalRevenue,
+                        totalCOGS,
+                        totalExpenses,
+                        netProfit
+                    },
+                    recorded: true
+                }
+            });
+        }
+        else {
+            return res.json({
+                success: true,
+                message: 'No profit or loss for this period',
+                data: {
+                    period: {
+                        startDate: periodStart,
+                        endDate: periodEnd
+                    },
+                    calculation: {
+                        totalRevenue,
+                        totalCOGS,
+                        totalExpenses,
+                        netProfit
+                    },
+                    recorded: false
+                }
+            });
+        }
+    }
+    catch (error) {
+        console.error('Error calculating profit:', error);
+        return res.status(500).json({ error: 'Failed to calculate and record profit' });
+    }
+};
+exports.calculateAndRecordProfit = calculateAndRecordProfit;
+const getProfitSummary = async (req, res) => {
+    try {
+        const { startDate, endDate, profitType } = req.query;
+        const where = {
+            isActive: true,
+            accountType: 'EQUITY'
+        };
+        if (startDate && endDate) {
+            where.date = {
+                gte: new Date(startDate),
+                lte: new Date(endDate)
+            };
+        }
+        if (profitType) {
+            const profitTypeStr = profitType === 'INVESTOR_PROFIT' ? 'Investor Profit' : 'Profit';
+            where.description = {
+                contains: profitTypeStr
+            };
+        }
+        const equityTransactions = await prisma.companyTransaction.findMany({
+            where,
+            orderBy: {
+                date: 'desc'
+            }
+        });
+        const deposits = equityTransactions
+            .filter(t => t.type === 'CREDIT')
+            .reduce((sum, t) => sum + Number(t.amount), 0);
+        const withdrawals = equityTransactions
+            .filter(t => t.type === 'DEBIT')
+            .reduce((sum, t) => sum + Number(t.amount), 0);
+        const netProfit = deposits - withdrawals;
+        const investorDeposits = equityTransactions
+            .filter(t => t.type === 'CREDIT' && t.description.toLowerCase().includes('investor'))
+            .reduce((sum, t) => sum + Number(t.amount), 0);
+        const investorWithdrawals = equityTransactions
+            .filter(t => t.type === 'DEBIT' && t.description.toLowerCase().includes('investor'))
+            .reduce((sum, t) => sum + Number(t.amount), 0);
+        const regularDeposits = equityTransactions
+            .filter(t => t.type === 'CREDIT' && !t.description.toLowerCase().includes('investor'))
+            .reduce((sum, t) => sum + Number(t.amount), 0);
+        const regularWithdrawals = equityTransactions
+            .filter(t => t.type === 'DEBIT' && !t.description.toLowerCase().includes('investor'))
+            .reduce((sum, t) => sum + Number(t.amount), 0);
+        return res.json({
+            total: {
+                deposits,
+                withdrawals,
+                netProfit
+            },
+            regular: {
+                deposits: regularDeposits,
+                withdrawals: regularWithdrawals,
+                netProfit: regularDeposits - regularWithdrawals
+            },
+            investor: {
+                deposits: investorDeposits,
+                withdrawals: investorWithdrawals,
+                netProfit: investorDeposits - investorWithdrawals
+            },
+            transactions: equityTransactions.map(t => ({
+                id: t.id,
+                type: t.type,
+                amount: Number(t.amount),
+                description: t.description,
+                date: t.date,
+                reference: t.reference
+            }))
+        });
+    }
+    catch (error) {
+        console.error('Error fetching profit summary:', error);
+        return res.status(500).json({ error: 'Failed to fetch profit summary' });
+    }
+};
+exports.getProfitSummary = getProfitSummary;
 //# sourceMappingURL=accountingController.js.map

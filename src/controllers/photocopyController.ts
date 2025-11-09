@@ -154,7 +154,7 @@ export const createPhotocopyOrder = async (req: Request, res: Response): Promise
     const finalDiscountAmount = Math.min(discountAmount, subtotal); // Ensure discount doesn't exceed subtotal
     const total = Math.max(0, subtotal - finalDiscountAmount); // Ensure total doesn't go below 0
 
-    // Create or find walk-in customer
+    // Create or find customer
     let customer = null;
     if (customerName || customerPhone) {
       // First try to find existing customer by phone
@@ -166,18 +166,22 @@ export const createPhotocopyOrder = async (req: Request, res: Response): Promise
         });
       }
       
-      // If not found, create a new customer
+      // If not found, create a new customer for this specific walk-in with contact info
       if (!customer) {
         customer = await prisma.customer.create({
           data: {
             firstName: customerName || 'Walk-in',
             lastName: 'Customer',
-            phone: customerPhone || 'WALK-IN',
+            phone: customerPhone || '',
             email: `walk-in-${Date.now()}@temp.com`,
             isWalkIn: true
           }
         });
       }
+    } else {
+      // No name/phone provided - use the generic walk-in customer
+      const { getOrCreateWalkInCustomer } = await import('../utils/walkInCustomer');
+      customer = await getOrCreateWalkInCustomer();
     }
 
     // Get system user for the order (or create a default one)

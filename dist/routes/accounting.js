@@ -25,5 +25,9 @@ router.get('/expense-categories', accountingController_1.getExpenseCategories);
 router.post('/expense-categories', accountingController_1.addExpenseCategory);
 router.put('/expense-categories/:id', accountingController_1.updateExpenseCategory);
 router.delete('/expense-categories/:id', accountingController_1.deleteExpenseCategory);
+router.post('/profit/deposit', accountingController_1.depositProfit);
+router.post('/profit/withdraw', accountingController_1.withdrawProfit);
+router.get('/profit/summary', accountingController_1.getProfitSummary);
+router.post('/profit/calculate', accountingController_1.calculateAndRecordProfit);
 exports.default = router;
 //# sourceMappingURL=accounting.js.map

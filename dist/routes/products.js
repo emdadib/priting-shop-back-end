@@ -11,7 +11,7 @@ const productController_1 = require("../controllers/productController");
 const router = express_1.default.Router();
 router.get('/', [
     (0, express_validator_1.query)('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
-    (0, express_validator_1.query)('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+    (0, express_validator_1.query)('limit').optional().isInt({ min: 1, max: 1000 }).withMessage('Limit must be between 1 and 1000'),
     (0, express_validator_1.query)('search').optional().isString().withMessage('Search must be a string'),
     (0, express_validator_1.query)('category').optional().isString().withMessage('Category must be a string'),
     (0, express_validator_1.query)('type').optional().isIn(['PHYSICAL', 'SERVICE', 'DIGITAL']).withMessage('Invalid product type'),
