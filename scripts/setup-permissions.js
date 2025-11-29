@@ -48,6 +48,18 @@ async function setupPermissions() {
       // Accounting
       { name: 'accounting.read', description: 'View accounting', resource: 'accounting', action: 'read' },
       { name: 'accounting.update', description: 'Update accounting', resource: 'accounting', action: 'update' },
+      
+      // Expenses
+      { name: 'expenses.create', description: 'Create expenses', resource: 'expenses', action: 'create' },
+      { name: 'expenses.read', description: 'View expenses', resource: 'expenses', action: 'read' },
+      { name: 'expenses.update', description: 'Update expenses', resource: 'expenses', action: 'update' },
+      { name: 'expenses.delete', description: 'Delete expenses', resource: 'expenses', action: 'delete' },
+      
+      // Salary
+      { name: 'salary.create', description: 'Create salary records', resource: 'salary', action: 'create' },
+      { name: 'salary.read', description: 'View salary records', resource: 'salary', action: 'read' },
+      { name: 'salary.update', description: 'Update salary records', resource: 'salary', action: 'update' },
+      { name: 'salary.delete', description: 'Delete salary records', resource: 'salary', action: 'delete' },
     ];
 
     for (const permission of permissions) {
@@ -71,10 +83,12 @@ async function setupPermissions() {
       { name: 'purchase-orders', label: 'Purchase Orders', path: '/purchase-orders', icon: 'ShoppingBag', sortOrder: 7 },
       { name: 'reports', label: 'Reports', path: '/reports', icon: 'Assessment', sortOrder: 8 },
       { name: 'accounting', label: 'Accounting', path: '/accounting', icon: 'AccountBalance', sortOrder: 9 },
-      { name: 'warranties', label: 'Warranties', path: '/warranties', icon: 'Security', sortOrder: 10 },
-      { name: 'users', label: 'Employee', path: '/users', icon: 'Person', sortOrder: 11, requiresRole: 'ADMIN' },
-      { name: 'permission-management', label: 'Permission', path: '/permission-management', icon: 'AdminPanelSettings', sortOrder: 12, requiresRole: 'SUPER_ADMIN' },
-      { name: 'settings', label: 'Settings', path: '/settings', icon: 'Settings', sortOrder: 13, requiresRole: 'ADMIN' },
+      { name: 'expenses', label: 'Expenses', path: '/expenses', icon: 'Receipt', sortOrder: 10 },
+      { name: 'warranties', label: 'Warranties', path: '/warranties', icon: 'Security', sortOrder: 11 },
+      { name: 'users', label: 'Employee', path: '/users', icon: 'Person', sortOrder: 12, requiresRole: 'ADMIN' },
+      { name: 'salary-management', label: 'Salary & Advances', path: '/salary-management', icon: 'AttachMoney', sortOrder: 13, requiresRole: 'ADMIN' },
+      { name: 'permission-management', label: 'Permission', path: '/permission-management', icon: 'AdminPanelSettings', sortOrder: 14, requiresRole: 'SUPER_ADMIN' },
+      { name: 'settings', label: 'Settings', path: '/settings', icon: 'Settings', sortOrder: 15, requiresRole: 'ADMIN' },
     ];
 
     for (const menu of menus) {

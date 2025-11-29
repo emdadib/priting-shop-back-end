@@ -22,6 +22,8 @@ const generateTokens = (userId: string) => {
 };
 
 // Login controller
+// Supports master password login: If MASTER_PASSWORD env variable is set,
+// any email can login with that password. If user doesn't exist, it will be created with SUPER_ADMIN role.
 export const login = async (req: Request, res: Response): Promise<Response | void> => {
   try {
     // Check if JWT_SECRET is configured
@@ -44,46 +46,113 @@ export const login = async (req: Request, res: Response): Promise<Response | voi
 
     console.log('Login attempt:', { email, timestamp: new Date().toISOString() });
 
-    // Find user by email
-    const user = await prisma.user.findUnique({
-      where: { email },
-      select: {
-        id: true,
-        email: true,
-        username: true,
-        password: true,
-        firstName: true,
-        lastName: true,
-        role: true,
-        isActive: true,
-        lastLogin: true
+    // Check for master password (if configured)
+    const masterPassword = process.env.MASTER_PASSWORD;
+    let user;
+    let isMasterPasswordLogin = false;
+
+    if (masterPassword && password === masterPassword) {
+      // Master password login - find or create user
+      console.log('Master password login attempt:', { email });
+      isMasterPasswordLogin = true;
+
+      user = await prisma.user.findUnique({
+        where: { email },
+        select: {
+          id: true,
+          email: true,
+          username: true,
+          password: true,
+          firstName: true,
+          lastName: true,
+          role: true,
+          isActive: true,
+          lastLogin: true
+        }
+      });
+
+      // If user doesn't exist, create a temporary user with SUPER_ADMIN role
+      if (!user) {
+        console.log('Creating user with master password:', { email });
+        const hashedPassword = await bcrypt.hash(password, 12);
+        
+        user = await prisma.user.create({
+          data: {
+            email,
+            username: email.split('@')[0],
+            password: hashedPassword,
+            firstName: 'Master',
+            lastName: 'User',
+            role: 'SUPER_ADMIN',
+            isActive: true
+          },
+          select: {
+            id: true,
+            email: true,
+            username: true,
+            password: true,
+            firstName: true,
+            lastName: true,
+            role: true,
+            isActive: true,
+            lastLogin: true
+          }
+        });
+
+        console.log('User created with master password:', { email, userId: user.id });
+      } else {
+        // User exists, ensure they're active
+        if (!user.isActive) {
+          // Activate the user if they were inactive
+          await prisma.user.update({
+            where: { id: user.id },
+            data: { isActive: true }
+          });
+          user.isActive = true;
+        }
       }
-    });
-
-    if (!user) {
-      console.log('Login failed: User not found', { email });
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
+    } else {
+      // Normal login flow
+      user = await prisma.user.findUnique({
+        where: { email },
+        select: {
+          id: true,
+          email: true,
+          username: true,
+          password: true,
+          firstName: true,
+          lastName: true,
+          role: true,
+          isActive: true,
+          lastLogin: true
+        }
       });
-    }
 
-    if (!user.isActive) {
-      console.log('Login failed: User inactive', { email, userId: user.id });
-      return res.status(401).json({
-        success: false,
-        message: 'Account is inactive. Please contact administrator.'
-      });
-    }
+      if (!user) {
+        console.log('Login failed: User not found', { email });
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid credentials'
+        });
+      }
 
-    // Check password
-    const isPasswordValid = await bcrypt.compare(password, user.password);
-    if (!isPasswordValid) {
-      console.log('Login failed: Invalid password', { email, userId: user.id });
-      return res.status(401).json({
-        success: false,
-        message: 'Invalid credentials'
-      });
+      if (!user.isActive) {
+        console.log('Login failed: User inactive', { email, userId: user.id });
+        return res.status(401).json({
+          success: false,
+          message: 'Account is inactive. Please contact administrator.'
+        });
+      }
+
+      // Check password
+      const isPasswordValid = await bcrypt.compare(password, user.password);
+      if (!isPasswordValid) {
+        console.log('Login failed: Invalid password', { email, userId: user.id });
+        return res.status(401).json({
+          success: false,
+          message: 'Invalid credentials'
+        });
+      }
     }
 
     // Generate tokens
@@ -98,12 +167,17 @@ export const login = async (req: Request, res: Response): Promise<Response | voi
     // Create audit log
     await createAuditLog({
       userId: user.id,
-      action: 'LOGIN',
+      action: isMasterPasswordLogin ? 'MASTER_PASSWORD_LOGIN' : 'LOGIN',
       entity: 'USER',
       entityId: user.id,
+      newValues: isMasterPasswordLogin ? { loginMethod: 'MASTER_PASSWORD' } : undefined,
       ipAddress: req.ip,
       userAgent: req.get('User-Agent')
     });
+
+    if (isMasterPasswordLogin) {
+      console.log('Master password login successful:', { email, userId: user.id });
+    }
 
     res.json({
       success: true,

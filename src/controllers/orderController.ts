@@ -7,7 +7,41 @@ const prisma = new PrismaClient();
 // Get all orders
 export const getAllOrders = async (req: Request, res: Response): Promise<Response | void> => {
   try {
+    const { page, limit, status, startDate, endDate } = req.query;
+    
+    // Build where clause
+    const where: any = {};
+    
+    // Add status filter if provided
+    if (status && status !== 'all') {
+      where.status = status;
+    }
+    
+    // Add date range filter if provided
+    if (startDate || endDate) {
+      where.createdAt = {};
+      if (startDate) {
+        where.createdAt.gte = new Date(startDate as string);
+      }
+      if (endDate) {
+        // Set end date to end of day
+        const end = new Date(endDate as string);
+        end.setHours(23, 59, 59, 999);
+        where.createdAt.lte = end;
+      }
+    }
+    
+    // Parse pagination parameters
+    const pageNum = page ? parseInt(page as string, 10) : 1;
+    const limitNum = limit ? parseInt(limit as string, 10) : 10;
+    const skip = (pageNum - 1) * limitNum;
+    
+    // Get total count for pagination
+    const total = await prisma.order.count({ where });
+    
+    // Fetch orders with pagination
     const orders = await prisma.order.findMany({
+      where,
       include: {
         customer: true,
         user: true,
@@ -19,12 +53,20 @@ export const getAllOrders = async (req: Request, res: Response): Promise<Respons
       },
       orderBy: {
         createdAt: 'desc'
-      }
+      },
+      skip,
+      take: limitNum
     });
 
     res.json({
       success: true,
-      data: orders
+      data: orders,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total,
+        totalPages: Math.ceil(total / limitNum)
+      }
     });
   } catch (error) {
     console.error('Get all orders error:', error);

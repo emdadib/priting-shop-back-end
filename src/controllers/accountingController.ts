@@ -55,20 +55,37 @@ export const getCustomerLedger = async (req: Request, res: Response) => {
 
     const total = await prisma.customerTransaction.count({ where });
 
-    // Calculate balance
-    const balance = await prisma.customerTransaction.aggregate({
+    // Calculate balance: Debit - Credit (Asset Account - Accounts Receivable)
+    // DEBIT = customer owes (receivable increases - asset increases)
+    // CREDIT = customer paid (receivable decreases - asset decreases)
+    // Balance = Debit - Credit (positive means customer owes, negative means customer overpaid/credit balance)
+    const debitSum = await prisma.customerTransaction.aggregate({
       where: {
         customerId,
-        isActive: true
+        isActive: true,
+        type: 'DEBIT'
       },
       _sum: {
         amount: true
       }
     });
 
+    const creditSum = await prisma.customerTransaction.aggregate({
+      where: {
+        customerId,
+        isActive: true,
+        type: 'CREDIT'
+      },
+      _sum: {
+        amount: true
+      }
+    });
+
+    const balance = Number(debitSum._sum.amount || 0) - Number(creditSum._sum.amount || 0);
+
     return res.json({
       transactions,
-      balance: Number(balance._sum.amount || 0),
+      balance,
       pagination: {
         page: Number(page),
         limit: Number(limit),
@@ -122,20 +139,37 @@ export const getSupplierLedger = async (req: Request, res: Response) => {
 
     const total = await prisma.supplierTransaction.count({ where });
 
-    // Calculate balance
-    const balance = await prisma.supplierTransaction.aggregate({
+    // Calculate balance: Credit - Debit
+    // DEBIT = company paid supplier (payable decreases)
+    // CREDIT = company owes supplier (payable increases)
+    // Balance = Credit - Debit (positive means company owes, negative means overpaid)
+    const creditSum = await prisma.supplierTransaction.aggregate({
       where: {
         supplierId,
-        isActive: true
+        isActive: true,
+        type: 'CREDIT'
       },
       _sum: {
         amount: true
       }
     });
 
+    const debitSum = await prisma.supplierTransaction.aggregate({
+      where: {
+        supplierId,
+        isActive: true,
+        type: 'DEBIT'
+      },
+      _sum: {
+        amount: true
+      }
+    });
+
+    const balance = Number(creditSum._sum.amount || 0) - Number(debitSum._sum.amount || 0);
+
     return res.json({
       transactions,
-      balance: Number(balance._sum.amount || 0),
+      balance,
       pagination: {
         page: Number(page),
         limit: Number(limit),
@@ -182,19 +216,71 @@ export const getCompanyLedger = async (req: Request, res: Response) => {
 
     const total = await prisma.companyTransaction.count({ where });
 
-    // Calculate balance
-    const balance = await prisma.companyTransaction.aggregate({
+    // Calculate balance based on account type (double-entry accounting)
+    // Asset accounts (CASH, BANK, ACCOUNTS_RECEIVABLE): Debit - Credit
+    // Liability accounts (ACCOUNTS_PAYABLE): Credit - Debit
+    // Equity accounts (EQUITY): Credit - Debit
+    // Revenue accounts (SALES): Credit - Debit
+    // Expense accounts (EXPENSES, PURCHASES): Debit - Credit
+    const balanceWhere: any = {
+      isActive: true
+    };
+
+    if (accountType) {
+      balanceWhere.accountType = accountType;
+    }
+
+    const creditSum = await prisma.companyTransaction.aggregate({
       where: {
-        isActive: true
+        ...balanceWhere,
+        type: 'CREDIT'
       },
       _sum: {
         amount: true
       }
     });
 
+    const debitSum = await prisma.companyTransaction.aggregate({
+      where: {
+        ...balanceWhere,
+        type: 'DEBIT'
+      },
+      _sum: {
+        amount: true
+      }
+    });
+
+    const totalCredit = Number(creditSum._sum.amount || 0);
+    const totalDebit = Number(debitSum._sum.amount || 0);
+
+    // Determine balance calculation based on account type
+    let balance: number;
+    if (accountType) {
+      // Asset accounts: Debit - Credit
+      if (accountType === 'CASH' || accountType === 'BANK' || accountType === 'ACCOUNTS_RECEIVABLE') {
+        balance = totalDebit - totalCredit;
+      }
+      // Liability, Equity, Revenue accounts: Credit - Debit
+      else if (accountType === 'ACCOUNTS_PAYABLE' || accountType === 'EQUITY' || accountType === 'SALES') {
+        balance = totalCredit - totalDebit;
+      }
+      // Expense accounts: Debit - Credit
+      else if (accountType === 'EXPENSES' || accountType === 'PURCHASES') {
+        balance = totalDebit - totalCredit;
+      }
+      // Default: Credit - Debit (for unknown types, assume liability/equity)
+      else {
+        balance = totalCredit - totalDebit;
+      }
+    } else {
+      // If no account type filter, calculate net position (Credit - Debit)
+      // This represents overall financial position
+      balance = totalCredit - totalDebit;
+    }
+
     return res.json({
       transactions,
-      balance: Number(balance._sum.amount || 0),
+      balance,
       pagination: {
         page: Number(page),
         limit: Number(limit),

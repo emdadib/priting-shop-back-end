@@ -475,16 +475,38 @@ export const getUserAccessibleMenus = async (req: Request, res: Response): Promi
 
     const userRoleLevel = roleHierarchy[user.role as keyof typeof roleHierarchy] || 0;
 
-    // Get menus accessible by role
-    const accessibleMenus = await prisma.menu.findMany({
+    // Get user-specific menu permissions first
+    const userMenuPermissions = await prisma.userMenuPermission.findMany({
+      where: {
+        userId,
+        canView: true
+      },
+      include: {
+        menu: {
+          include: {
+            children: {
+              where: { isActive: true },
+              orderBy: { sortOrder: 'asc' }
+            }
+          }
+        }
+      }
+    });
+
+    // Get menu IDs that user has explicit permission for
+    const permittedMenuIds = userMenuPermissions.map(p => p.menuId);
+
+    // Get menus accessible by role (menus with requiresRole that matches user's role level)
+    // NOTE: Menus with requiresRole: null are NOT automatically accessible
+    // They must have explicit user menu permissions granted
+    const roleBasedMenus = await prisma.menu.findMany({
       where: {
         isActive: true,
-        OR: [
-          { requiresRole: null },
-          { requiresRole: { in: Object.keys(roleHierarchy).filter(role => 
+        requiresRole: { 
+          in: Object.keys(roleHierarchy).filter(role => 
             roleHierarchy[role as keyof typeof roleHierarchy] <= userRoleLevel
-          ) } }
-        ]
+          ) 
+        }
       },
       orderBy: { sortOrder: 'asc' },
       include: {
@@ -495,28 +517,22 @@ export const getUserAccessibleMenus = async (req: Request, res: Response): Promi
       }
     });
 
-    // Get user-specific menu permissions
-    const userMenuPermissions = await prisma.userMenuPermission.findMany({
-      where: {
-        userId,
-        canView: true
-      },
-      include: {
-        menu: true
-      }
-    });
-
-    // Combine role-based and permission-based menus
-    const allAccessibleMenus = [...accessibleMenus];
+    // Combine role-based menus and explicitly permitted menus
+    // Only include menus that either:
+    // 1. Have a requiresRole that matches user's role level, OR
+    // 2. Have explicit user menu permissions granted (including menus with requiresRole: null)
+    const allAccessibleMenus: any[] = [];
     
+    // Add role-based menus
+    roleBasedMenus.forEach(menu => {
+      allAccessibleMenus.push(menu);
+    });
+    
+    // Add explicitly permitted menus (that aren't already included)
+    // This includes menus with requiresRole: null that have been granted to the user
     userMenuPermissions.forEach(permission => {
       if (!allAccessibleMenus.find(menu => menu.id === permission.menu.id)) {
-        // Add children property to match the expected type
-        const menuWithChildren = {
-          ...permission.menu,
-          children: []
-        };
-        allAccessibleMenus.push(menuWithChildren);
+        allAccessibleMenus.push(permission.menu);
       }
     });
 
