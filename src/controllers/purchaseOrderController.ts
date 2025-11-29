@@ -1,5 +1,6 @@
 import { Request, Response } from 'express';
 import { PrismaClient } from '@prisma/client';
+import { createAuditLog } from '../utils/auditLogger';
 
 const prisma = new PrismaClient();
 
@@ -535,6 +536,126 @@ export const deletePurchaseOrder = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
+    // First, get the purchase order with items to check status and update inventory
+    const existingOrder = await prisma.purchaseOrder.findUnique({
+      where: { id },
+      include: {
+        items: {
+          include: {
+            product: true
+          }
+        }
+      }
+    });
+
+    if (!existingOrder) {
+      return res.status(404).json({
+        success: false,
+        message: 'Purchase order not found'
+      });
+    }
+
+    // If purchase order was RECEIVED or PARTIAL_RECEIVED, decrease inventory
+    if (existingOrder.status === 'RECEIVED' || existingOrder.status === 'PARTIAL_RECEIVED') {
+      console.log('Decreasing inventory for deleted purchase order:', {
+        orderId: id,
+        poNumber: existingOrder.poNumber,
+        status: existingOrder.status,
+        itemsCount: existingOrder.items.length
+      });
+
+      for (const item of existingOrder.items) {
+        // Only update inventory for physical products that have inventory tracking
+        if (item.product.type === 'PHYSICAL' && item.product.hasInventory) {
+          const existingInventory = await prisma.inventory.findUnique({
+            where: { productId: item.productId }
+          });
+
+          if (existingInventory) {
+            // Calculate new quantity (prevent negative inventory)
+            const newQuantity = Math.max(0, existingInventory.quantity - item.quantity);
+            const newAvailable = Math.max(0, existingInventory.available - item.quantity);
+
+            // Update inventory
+            await prisma.inventory.update({
+              where: { productId: item.productId },
+              data: {
+                quantity: newQuantity,
+                available: newAvailable,
+                lastUpdated: new Date()
+              }
+            });
+
+            // Create inventory movement record
+            await prisma.inventoryMovement.create({
+              data: {
+                productId: item.productId,
+                type: 'ADJUSTMENT',
+                quantity: -item.quantity, // Negative for deletion
+                previousQuantity: existingInventory.quantity,
+                newQuantity: newQuantity,
+                reason: `Purchase order ${existingOrder.poNumber} deleted - Stock decrease`,
+                reference: `PO-${existingOrder.poNumber}`,
+                userId: (req as any).user?.id || 'unknown'
+              }
+            });
+
+            console.log('Inventory decreased for product:', {
+              productId: item.productId,
+              productName: item.product.name,
+              quantityRemoved: item.quantity,
+              previousQuantity: existingInventory.quantity,
+              newQuantity: newQuantity
+            });
+          } else {
+            console.warn('No inventory record found for product:', {
+              productId: item.productId,
+              productName: item.product.name
+            });
+          }
+        }
+      }
+    }
+
+    // Delete related transactions if they exist
+    // Delete supplier transactions related to this purchase order
+    await prisma.supplierTransaction.deleteMany({
+      where: {
+        OR: [
+          { referenceId: id, referenceType: 'PURCHASE_ORDER' },
+          { reference: existingOrder.poNumber }
+        ]
+      }
+    });
+
+    // Delete company transactions related to this purchase order
+    await prisma.companyTransaction.deleteMany({
+      where: {
+        OR: [
+          { referenceId: id, referenceType: 'PURCHASE_ORDER' },
+          { reference: existingOrder.poNumber }
+        ]
+      }
+    });
+
+    // Delete payments related to this purchase order
+    // Payments for purchase orders are linked via supplierId and reference field
+    await prisma.payment.deleteMany({
+      where: {
+        AND: [
+          { supplierId: existingOrder.supplierId },
+          { reference: existingOrder.poNumber }
+        ]
+      }
+    });
+
+    // Delete inventory movements related to this purchase order
+    await prisma.inventoryMovement.deleteMany({
+      where: {
+        reference: `PO-${existingOrder.poNumber}`
+      }
+    });
+
     // Delete items first due to foreign key constraint
     await prisma.purchaseOrderItem.deleteMany({
       where: { purchaseOrderId: id }
@@ -545,10 +666,33 @@ export const deletePurchaseOrder = async (req: Request, res: Response) => {
       where: { id }
     });
 
-    return res.json({ message: 'Purchase order deleted successfully' });
+    // Create audit log
+    await createAuditLog({
+      userId: (req as any).user?.id || 'unknown',
+      action: 'DELETE',
+      entity: 'PURCHASE_ORDER',
+      entityId: id,
+      oldValues: {
+        poNumber: existingOrder.poNumber,
+        status: existingOrder.status,
+        total: existingOrder.total
+      },
+      newValues: null,
+      ipAddress: req.ip,
+      userAgent: req.get('User-Agent')
+    });
+
+    return res.json({
+      success: true,
+      message: 'Purchase order deleted successfully'
+    });
   } catch (error) {
     console.error('Error deleting purchase order:', error);
-    return res.status(500).json({ error: 'Failed to delete purchase order' });
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to delete purchase order',
+      message: error instanceof Error ? error.message : 'Unknown error'
+    });
   }
 };
 
