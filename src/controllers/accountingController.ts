@@ -223,10 +223,17 @@ export const getCompanyLedger = async (req: Request, res: Response) => {
     // For liability/equity accounts (EQUITY): CREDIT increases, DEBIT decreases
     // For revenue accounts (SALES): CREDIT increases, DEBIT decreases
     // For expense accounts (EXPENSES, PURCHASES): DEBIT increases, CREDIT decreases
+    const balanceWhere: any = {
+      isActive: true
+    };
+
+    // If filtering by accountType, only calculate balance for that account type
+    if (accountType) {
+      balanceWhere.accountType = accountType;
+    }
+
     const allTransactions = await prisma.companyTransaction.findMany({
-      where: {
-        isActive: true
-      },
+      where: balanceWhere,
       select: {
         accountType: true,
         type: true,
@@ -237,11 +244,11 @@ export const getCompanyLedger = async (req: Request, res: Response) => {
     let balance = 0;
     allTransactions.forEach(transaction => {
       const amount = Number(transaction.amount);
-      const accountType = transaction.accountType;
+      const transactionAccountType = transaction.accountType;
       const transactionType = transaction.type;
 
       // Asset accounts: DEBIT increases, CREDIT decreases
-      if (accountType === 'CASH' || accountType === 'BANK') {
+      if (transactionAccountType === 'CASH' || transactionAccountType === 'BANK') {
         if (transactionType === 'DEBIT') {
           balance += amount;
         } else {
@@ -249,7 +256,7 @@ export const getCompanyLedger = async (req: Request, res: Response) => {
         }
       }
       // Liability/Equity accounts: CREDIT increases, DEBIT decreases
-      else if (accountType === 'EQUITY') {
+      else if (transactionAccountType === 'EQUITY') {
         if (transactionType === 'CREDIT') {
           balance += amount;
         } else {
@@ -257,7 +264,7 @@ export const getCompanyLedger = async (req: Request, res: Response) => {
         }
       }
       // Revenue accounts: CREDIT increases, DEBIT decreases
-      else if (accountType === 'SALES') {
+      else if (transactionAccountType === 'SALES') {
         if (transactionType === 'CREDIT') {
           balance += amount;
         } else {
@@ -265,7 +272,7 @@ export const getCompanyLedger = async (req: Request, res: Response) => {
         }
       }
       // Expense accounts: DEBIT increases, CREDIT decreases
-      else if (accountType === 'EXPENSES' || accountType === 'PURCHASES') {
+      else if (transactionAccountType === 'EXPENSES' || transactionAccountType === 'PURCHASES') {
         if (transactionType === 'DEBIT') {
           balance += amount;
         } else {
