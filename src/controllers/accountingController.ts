@@ -223,6 +223,7 @@ export const getCompanyLedger = async (req: Request, res: Response) => {
     // For liability/equity accounts (EQUITY): CREDIT increases, DEBIT decreases
     // For revenue accounts (SALES): CREDIT increases, DEBIT decreases
     // For expense accounts (EXPENSES, PURCHASES): DEBIT increases, CREDIT decreases
+    
     const balanceWhere: any = {
       isActive: true
     };
@@ -241,57 +242,138 @@ export const getCompanyLedger = async (req: Request, res: Response) => {
       }
     });
 
-    let balance = 0;
+    // If filtering by specific accountType, return single balance
+    if (accountType) {
+      let balance = 0;
+      allTransactions.forEach(transaction => {
+        const amount = Number(transaction.amount);
+        const transactionAccountType = transaction.accountType;
+        const transactionType = transaction.type;
+
+        // Asset accounts: DEBIT increases, CREDIT decreases
+        if (transactionAccountType === 'CASH' || transactionAccountType === 'BANK') {
+          if (transactionType === 'DEBIT') {
+            balance += amount;
+          } else {
+            balance -= amount;
+          }
+        }
+        // Liability/Equity accounts: CREDIT increases, DEBIT decreases
+        else if (transactionAccountType === 'EQUITY') {
+          if (transactionType === 'CREDIT') {
+            balance += amount;
+          } else {
+            balance -= amount;
+          }
+        }
+        // Revenue accounts: CREDIT increases, DEBIT decreases
+        else if (transactionAccountType === 'SALES') {
+          if (transactionType === 'CREDIT') {
+            balance += amount;
+          } else {
+            balance -= amount;
+          }
+        }
+        // Expense accounts: DEBIT increases, CREDIT decreases
+        else if (transactionAccountType === 'EXPENSES' || transactionAccountType === 'PURCHASES') {
+          if (transactionType === 'DEBIT') {
+            balance += amount;
+          } else {
+            balance -= amount;
+          }
+        }
+        // Default: treat as asset (DEBIT increases, CREDIT decreases)
+        else {
+          if (transactionType === 'DEBIT') {
+            balance += amount;
+          } else {
+            balance -= amount;
+          }
+        }
+      });
+
+      return res.json({
+        transactions,
+        balance: balance,
+        accountType: accountType,
+        pagination: {
+          page: Number(page),
+          limit: Number(limit),
+          total,
+          pages: Math.ceil(total / Number(limit))
+        }
+      });
+    }
+
+    // If no accountType filter, calculate balances separately for each account type
+    const balancesByAccountType: Record<string, number> = {
+      CASH: 0,
+      BANK: 0,
+      EQUITY: 0,
+      SALES: 0,
+      EXPENSES: 0,
+      PURCHASES: 0
+    };
+
     allTransactions.forEach(transaction => {
       const amount = Number(transaction.amount);
       const transactionAccountType = transaction.accountType;
       const transactionType = transaction.type;
 
+      // Initialize account type if not exists
+      if (!balancesByAccountType.hasOwnProperty(transactionAccountType)) {
+        balancesByAccountType[transactionAccountType] = 0;
+      }
+
       // Asset accounts: DEBIT increases, CREDIT decreases
       if (transactionAccountType === 'CASH' || transactionAccountType === 'BANK') {
         if (transactionType === 'DEBIT') {
-          balance += amount;
+          balancesByAccountType[transactionAccountType] += amount;
         } else {
-          balance -= amount;
+          balancesByAccountType[transactionAccountType] -= amount;
         }
       }
       // Liability/Equity accounts: CREDIT increases, DEBIT decreases
       else if (transactionAccountType === 'EQUITY') {
         if (transactionType === 'CREDIT') {
-          balance += amount;
+          balancesByAccountType[transactionAccountType] += amount;
         } else {
-          balance -= amount;
+          balancesByAccountType[transactionAccountType] -= amount;
         }
       }
       // Revenue accounts: CREDIT increases, DEBIT decreases
       else if (transactionAccountType === 'SALES') {
         if (transactionType === 'CREDIT') {
-          balance += amount;
+          balancesByAccountType[transactionAccountType] += amount;
         } else {
-          balance -= amount;
+          balancesByAccountType[transactionAccountType] -= amount;
         }
       }
       // Expense accounts: DEBIT increases, CREDIT decreases
       else if (transactionAccountType === 'EXPENSES' || transactionAccountType === 'PURCHASES') {
         if (transactionType === 'DEBIT') {
-          balance += amount;
+          balancesByAccountType[transactionAccountType] += amount;
         } else {
-          balance -= amount;
+          balancesByAccountType[transactionAccountType] -= amount;
         }
       }
       // Default: treat as asset (DEBIT increases, CREDIT decreases)
       else {
         if (transactionType === 'DEBIT') {
-          balance += amount;
+          balancesByAccountType[transactionAccountType] += amount;
         } else {
-          balance -= amount;
+          balancesByAccountType[transactionAccountType] -= amount;
         }
       }
     });
 
+    // Calculate net assets (CASH + BANK - this represents actual cash/bank balance)
+    const netAssets = balancesByAccountType.CASH + balancesByAccountType.BANK;
+
     return res.json({
       transactions,
-      balance: balance,
+      balance: netAssets, // Return net assets (CASH + BANK) as the main balance for backward compatibility
+      balancesByAccountType: balancesByAccountType, // Return detailed balances by account type
       pagination: {
         page: Number(page),
         limit: Number(limit),
