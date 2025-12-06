@@ -9,8 +9,8 @@ const jsonwebtoken_1 = __importDefault(require("jsonwebtoken"));
 const index_1 = require("../index");
 const auditLogger_1 = require("../utils/auditLogger");
 const generateTokens = (userId) => {
-    const accessToken = jsonwebtoken_1.default.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: '15m' });
-    const refreshToken = jsonwebtoken_1.default.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: '7d' });
+    const accessToken = jsonwebtoken_1.default.sign({ id: userId }, process.env.JWT_SECRET, { expiresIn: '8h' });
+    const refreshToken = jsonwebtoken_1.default.sign({ id: userId }, process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET, { expiresIn: '30d' });
     return { accessToken, refreshToken };
 };
 const login = async (req, res) => {
@@ -185,7 +185,8 @@ const refreshToken = async (req, res) => {
                 message: 'Refresh token required'
             });
         }
-        const decoded = jsonwebtoken_1.default.verify(refreshToken, process.env.JWT_REFRESH_SECRET);
+        const refreshSecret = process.env.JWT_REFRESH_SECRET || process.env.JWT_SECRET;
+        const decoded = jsonwebtoken_1.default.verify(refreshToken, refreshSecret);
         const user = await index_1.prisma.user.findUnique({
             where: { id: decoded.id },
             select: {

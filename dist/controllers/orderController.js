@@ -83,19 +83,47 @@ const createOrder = async (req, res) => {
         });
         let finalCustomerId = customerId;
         if (customerId === 'walk-in') {
-            const walkInCustomer = await prisma.customer.create({
-                data: {
-                    firstName: 'Walk-in',
-                    lastName: 'Customer',
-                    email: `walkin-${Date.now()}@temp.com`,
+            let walkInCustomer = await prisma.customer.findFirst({
+                where: {
+                    isWalkIn: true,
                     phone: '',
-                    address: '',
-                    isActive: true,
-                    isWalkIn: true
+                    firstName: 'Walk-in',
+                    lastName: 'Customer'
                 }
             });
+            if (!walkInCustomer) {
+                let email = `walkin@temp.com`;
+                let emailExists = true;
+                let attempt = 0;
+                while (emailExists && attempt < 10) {
+                    const existing = await prisma.customer.findUnique({
+                        where: { email }
+                    });
+                    if (!existing) {
+                        emailExists = false;
+                    }
+                    else {
+                        email = `walkin-${attempt}@temp.com`;
+                        attempt++;
+                    }
+                }
+                walkInCustomer = await prisma.customer.create({
+                    data: {
+                        firstName: 'Walk-in',
+                        lastName: 'Customer',
+                        email: email,
+                        phone: '',
+                        address: '',
+                        isActive: true,
+                        isWalkIn: true
+                    }
+                });
+                console.log('Created new walk-in customer:', walkInCustomer.id);
+            }
+            else {
+                console.log('Reusing existing walk-in customer:', walkInCustomer.id);
+            }
             finalCustomerId = walkInCustomer.id;
-            console.log('Created walk-in customer:', walkInCustomer.id);
         }
         if (!userId) {
             return res.status(401).json({
@@ -333,6 +361,27 @@ const deleteOrder = async (req, res) => {
         await prisma.orderItem.deleteMany({
             where: { orderId: id }
         });
+        await prisma.customerTransaction.updateMany({
+            where: {
+                referenceType: 'ORDER',
+                referenceId: id
+            },
+            data: {
+                isActive: false
+            }
+        });
+        await prisma.companyTransaction.updateMany({
+            where: {
+                referenceType: 'ORDER',
+                referenceId: id
+            },
+            data: {
+                isActive: false
+            }
+        });
+        await prisma.payment.deleteMany({
+            where: { orderId: id }
+        });
         await prisma.order.delete({
             where: { id }
         });
@@ -344,7 +393,8 @@ const deleteOrder = async (req, res) => {
             oldValues: {
                 customerId: existingOrder.customerId,
                 status: existingOrder.status,
-                type: existingOrder.type
+                type: existingOrder.type,
+                orderNumber: existingOrder.orderNumber
             },
             ipAddress: req.ip,
             userAgent: req.get('User-Agent')

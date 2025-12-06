@@ -416,6 +416,33 @@ export const deleteOrder = async (req: Request, res: Response): Promise<Response
       where: { orderId: id }
     });
 
+    // Delete related customer transactions
+    await prisma.customerTransaction.updateMany({
+      where: {
+        referenceType: 'ORDER',
+        referenceId: id
+      },
+      data: {
+        isActive: false // Soft delete - mark as inactive instead of hard delete
+      }
+    });
+
+    // Delete related company transactions
+    await prisma.companyTransaction.updateMany({
+      where: {
+        referenceType: 'ORDER',
+        referenceId: id
+      },
+      data: {
+        isActive: false // Soft delete - mark as inactive instead of hard delete
+      }
+    });
+
+    // Delete related payments (if any)
+    await prisma.payment.deleteMany({
+      where: { orderId: id }
+    });
+
     // Then delete the order
     await prisma.order.delete({
       where: { id }
@@ -430,7 +457,8 @@ export const deleteOrder = async (req: Request, res: Response): Promise<Response
       oldValues: {
         customerId: existingOrder.customerId,
         status: existingOrder.status,
-        type: existingOrder.type
+        type: existingOrder.type,
+        orderNumber: existingOrder.orderNumber
       },
       ipAddress: req.ip,
       userAgent: req.get('User-Agent')

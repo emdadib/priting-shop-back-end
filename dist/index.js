@@ -52,7 +52,8 @@ const io = new socket_io_1.Server(server, {
         methods: ["GET", "POST"]
     }
 });
-const PORT = process.env.PORT || 3001;
+const PORT = process.env.PORT || (process.env.NODE_ENV === 'production' ? 8080 : 3001);
+app.set('trust proxy', true);
 const limiter = (0, express_rate_limit_1.default)({
     windowMs: 15 * 60 * 1000,
     max: 1000,

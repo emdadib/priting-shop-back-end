@@ -20,7 +20,9 @@ import {
   depositProfit,
   withdrawProfit,
   getProfitSummary,
-  calculateAndRecordProfit
+  calculateAndRecordProfit,
+  findOrphanedTransactions,
+  cleanupOrphanedTransactions
 } from '../controllers/accountingController';
 import { authenticateToken } from '../middleware/auth';
 
@@ -63,5 +65,9 @@ router.post('/profit/deposit', depositProfit);
 router.post('/profit/withdraw', withdrawProfit);
 router.get('/profit/summary', getProfitSummary);
 router.post('/profit/calculate', calculateAndRecordProfit); // Calculate profit from sales automatically
+
+// Orphaned transactions management
+router.get('/orphaned-transactions', findOrphanedTransactions);
+router.post('/cleanup-orphaned-transactions', cleanupOrphanedTransactions);
 
 export default router;

@@ -71,33 +71,35 @@ const createSupplier = async (req, res) => {
             console.log('Validation failed: Name is required');
             return res.status(400).json({ error: 'Name is required' });
         }
-        if (!company || company.trim() === '') {
-            console.log('Validation failed: Company is required');
-            return res.status(400).json({ error: 'Company is required' });
-        }
         if (!phone || phone.trim() === '') {
             console.log('Validation failed: Phone is required');
             return res.status(400).json({ error: 'Phone is required' });
         }
         console.log('Validation passed, creating supplier...');
+        const toNullIfEmpty = (value) => {
+            if (value === undefined || value === null)
+                return null;
+            const trimmed = value.trim();
+            return trimmed === '' ? null : trimmed;
+        };
         const supplier = await prisma.supplier.create({
             data: {
                 name: name.trim(),
-                company: company.trim(),
-                email: email?.trim() || null,
+                company: company?.trim() || name.trim(),
+                email: toNullIfEmpty(email),
                 phone: phone.trim(),
-                address: address?.trim() || null,
-                city: city?.trim() || null,
-                state: state?.trim() || null,
-                zipCode: zipCode?.trim() || null,
-                country: country?.trim() || null,
-                taxId: taxId?.trim() || null,
-                contactPerson: contactPerson?.trim() || null,
-                contactPhone: contactPhone?.trim() || null,
-                website: website?.trim() || null,
-                paymentTerms: paymentTerms?.trim() || null,
+                address: toNullIfEmpty(address),
+                city: toNullIfEmpty(city),
+                state: toNullIfEmpty(state),
+                zipCode: toNullIfEmpty(zipCode),
+                country: toNullIfEmpty(country),
+                taxId: toNullIfEmpty(taxId),
+                contactPerson: toNullIfEmpty(contactPerson),
+                contactPhone: toNullIfEmpty(contactPhone),
+                website: toNullIfEmpty(website),
+                paymentTerms: toNullIfEmpty(paymentTerms),
                 creditLimit: creditLimit ? parseFloat(creditLimit) : null,
-                notes: notes?.trim() || null
+                notes: toNullIfEmpty(notes)
             }
         });
         console.log('Supplier created successfully:', supplier);
@@ -116,32 +118,35 @@ const updateSupplier = async (req, res) => {
         if (!name || name.trim() === '') {
             return res.status(400).json({ error: 'Name is required' });
         }
-        if (!company || company.trim() === '') {
-            return res.status(400).json({ error: 'Company is required' });
-        }
         if (!phone || phone.trim() === '') {
             return res.status(400).json({ error: 'Phone is required' });
         }
+        const toNullIfEmpty = (value) => {
+            if (value === undefined || value === null)
+                return null;
+            const trimmed = value.trim();
+            return trimmed === '' ? null : trimmed;
+        };
         const supplier = await prisma.supplier.update({
             where: { id },
             data: {
                 name: name.trim(),
-                company: company.trim(),
-                email: email?.trim() || null,
+                company: company?.trim() || name.trim(),
+                email: toNullIfEmpty(email),
                 phone: phone.trim(),
-                address: address?.trim() || null,
-                city: city?.trim() || null,
-                state: state?.trim() || null,
-                zipCode: zipCode?.trim() || null,
-                country: country?.trim() || null,
-                taxId: taxId?.trim() || null,
-                contactPerson: contactPerson?.trim() || null,
-                contactPhone: contactPhone?.trim() || null,
-                website: website?.trim() || null,
-                paymentTerms: paymentTerms?.trim() || null,
+                address: toNullIfEmpty(address),
+                city: toNullIfEmpty(city),
+                state: toNullIfEmpty(state),
+                zipCode: toNullIfEmpty(zipCode),
+                country: toNullIfEmpty(country),
+                taxId: toNullIfEmpty(taxId),
+                contactPerson: toNullIfEmpty(contactPerson),
+                contactPhone: toNullIfEmpty(contactPhone),
+                website: toNullIfEmpty(website),
+                paymentTerms: toNullIfEmpty(paymentTerms),
                 creditLimit: creditLimit ? parseFloat(creditLimit) : null,
                 isActive: isActive !== undefined ? isActive : true,
-                notes: notes?.trim() || null
+                notes: toNullIfEmpty(notes)
             }
         });
         return res.json(supplier);

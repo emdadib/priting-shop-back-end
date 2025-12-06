@@ -1422,3 +1422,158 @@ export const getProfitSummary = async (req: Request, res: Response) => {
     return res.status(500).json({ error: 'Failed to fetch profit summary' });
   }
 };
+
+// Find orphaned transactions (transactions referencing non-existent orders)
+export const findOrphanedTransactions = async (req: Request, res: Response) => {
+  try {
+    // Find all company transactions with ORDER reference type
+    const orderTransactions = await prisma.companyTransaction.findMany({
+      where: {
+        referenceType: 'ORDER',
+        isActive: true
+      },
+      select: {
+        id: true,
+        accountType: true,
+        type: true,
+        amount: true,
+        description: true,
+        reference: true,
+        referenceId: true,
+        date: true,
+        createdAt: true
+      }
+    });
+
+    // Find all customer transactions with ORDER reference type
+    const customerOrderTransactions = await prisma.customerTransaction.findMany({
+      where: {
+        referenceType: 'ORDER',
+        isActive: true
+      },
+      select: {
+        id: true,
+        type: true,
+        amount: true,
+        description: true,
+        referenceId: true,
+        date: true,
+        createdAt: true
+      }
+    });
+
+    // Get all existing order IDs
+    const existingOrders = await prisma.order.findMany({
+      select: { id: true, orderNumber: true }
+    });
+    const existingOrderIds = new Set(existingOrders.map(o => o.id));
+    const orderNumberMap = new Map(existingOrders.map(o => [o.id, o.orderNumber]));
+
+    // Find orphaned company transactions
+    const orphanedCompanyTransactions = orderTransactions.filter(
+      t => t.referenceId && !existingOrderIds.has(t.referenceId)
+    );
+
+    // Find orphaned customer transactions
+    const orphanedCustomerTransactions = customerOrderTransactions.filter(
+      t => t.referenceId && !existingOrderIds.has(t.referenceId)
+    );
+
+    return res.json({
+      orphanedCompanyTransactions: orphanedCompanyTransactions.map(t => ({
+        id: t.id,
+        accountType: t.accountType,
+        type: t.type,
+        amount: Number(t.amount),
+        description: t.description,
+        reference: t.reference,
+        referenceId: t.referenceId,
+        date: t.date,
+        createdAt: t.createdAt
+      })),
+      orphanedCustomerTransactions: orphanedCustomerTransactions.map(t => ({
+        id: t.id,
+        type: t.type,
+        amount: Number(t.amount),
+        description: t.description,
+        referenceId: t.referenceId,
+        date: t.date,
+        createdAt: t.createdAt
+      })),
+      totalOrphaned: orphanedCompanyTransactions.length + orphanedCustomerTransactions.length
+    });
+  } catch (error) {
+    console.error('Error finding orphaned transactions:', error);
+    return res.status(500).json({ error: 'Failed to find orphaned transactions' });
+  }
+};
+
+// Clean up orphaned transactions (mark as inactive)
+export const cleanupOrphanedTransactions = async (req: Request, res: Response) => {
+  try {
+    // Get all existing order IDs
+    const existingOrders = await prisma.order.findMany({
+      select: { id: true }
+    });
+    const existingOrderIds = new Set(existingOrders.map(o => o.id));
+
+    // Mark orphaned company transactions as inactive
+    const orphanedCompanyTransactions = await prisma.companyTransaction.findMany({
+      where: {
+        referenceType: 'ORDER',
+        isActive: true
+      },
+      select: { id: true, referenceId: true }
+    });
+
+    const orphanedCompanyIds = orphanedCompanyTransactions
+      .filter(t => t.referenceId && !existingOrderIds.has(t.referenceId))
+      .map(t => t.id);
+
+    if (orphanedCompanyIds.length > 0) {
+      await prisma.companyTransaction.updateMany({
+        where: {
+          id: { in: orphanedCompanyIds }
+        },
+        data: {
+          isActive: false
+        }
+      });
+    }
+
+    // Mark orphaned customer transactions as inactive
+    const orphanedCustomerTransactions = await prisma.customerTransaction.findMany({
+      where: {
+        referenceType: 'ORDER',
+        isActive: true
+      },
+      select: { id: true, referenceId: true }
+    });
+
+    const orphanedCustomerIds = orphanedCustomerTransactions
+      .filter(t => t.referenceId && !existingOrderIds.has(t.referenceId))
+      .map(t => t.id);
+
+    if (orphanedCustomerIds.length > 0) {
+      await prisma.customerTransaction.updateMany({
+        where: {
+          id: { in: orphanedCustomerIds }
+        },
+        data: {
+          isActive: false
+        }
+      });
+    }
+
+    return res.json({
+      success: true,
+      message: 'Orphaned transactions cleaned up successfully',
+      cleanedCompanyTransactions: orphanedCompanyIds.length,
+      cleanedCustomerTransactions: orphanedCustomerIds.length,
+      totalCleaned: orphanedCompanyIds.length + orphanedCustomerIds.length
+    });
+  } catch (error) {
+    console.error('Error cleaning up orphaned transactions:', error);
+    return res.status(500).json({ error: 'Failed to clean up orphaned transactions' });
+  }
+};
