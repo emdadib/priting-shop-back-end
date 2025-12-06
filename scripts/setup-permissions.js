@@ -63,18 +63,20 @@ async function setupPermissions() {
     // Create menus
     const menus = [
       { name: 'dashboard', label: 'Dashboard', path: '/dashboard', icon: 'Dashboard', sortOrder: 1 },
-      { name: 'orders', label: 'Orders', path: '/orders', icon: 'ShoppingCart', sortOrder: 2 },
-      { name: 'products', label: 'Products', path: '/products', icon: 'Inventory', sortOrder: 3 },
-      { name: 'customers', label: 'Customers', path: '/customers', icon: 'People', sortOrder: 4 },
-      { name: 'inventory', label: 'Inventory', path: '/inventory', icon: 'Warehouse', sortOrder: 5 },
-      { name: 'suppliers', label: 'Suppliers', path: '/suppliers', icon: 'Business', sortOrder: 6 },
-      { name: 'purchase-orders', label: 'Purchase Orders', path: '/purchase-orders', icon: 'ShoppingBag', sortOrder: 7 },
-      { name: 'reports', label: 'Reports', path: '/reports', icon: 'Assessment', sortOrder: 8 },
-      { name: 'accounting', label: 'Accounting', path: '/accounting', icon: 'AccountBalance', sortOrder: 9 },
-      { name: 'warranties', label: 'Warranties', path: '/warranties', icon: 'Security', sortOrder: 10 },
-      { name: 'users', label: 'Employee', path: '/users', icon: 'Person', sortOrder: 11, requiresRole: 'ADMIN' },
-      { name: 'permission-management', label: 'Permission', path: '/permission-management', icon: 'AdminPanelSettings', sortOrder: 12, requiresRole: 'SUPER_ADMIN' },
-      { name: 'settings', label: 'Settings', path: '/settings', icon: 'Settings', sortOrder: 13, requiresRole: 'ADMIN' },
+      { name: 'orders', label: 'Orders', path: '/orders', icon: 'ShoppingCart', sortOrder: 2, requiresRole: 'ADMIN' },
+      { name: 'products', label: 'Products', path: '/products', icon: 'Inventory', sortOrder: 3, requiresRole: 'ADMIN' },
+      { name: 'customers', label: 'Customers', path: '/customers', icon: 'People', sortOrder: 4, requiresRole: 'ADMIN' },
+      { name: 'inventory', label: 'Inventory', path: '/inventory', icon: 'Warehouse', sortOrder: 5, requiresRole: 'ADMIN' },
+      { name: 'suppliers', label: 'Suppliers', path: '/suppliers', icon: 'Business', sortOrder: 6, requiresRole: 'ADMIN' },
+      { name: 'purchase-orders', label: 'Purchase Orders', path: '/purchase-orders', icon: 'ShoppingBag', sortOrder: 7, requiresRole: 'ADMIN' },
+      { name: 'reports', label: 'Reports', path: '/reports', icon: 'Assessment', sortOrder: 8, requiresRole: 'ADMIN' },
+      { name: 'accounting', label: 'Accounting', path: '/accounting', icon: 'AccountBalance', sortOrder: 9, requiresRole: 'ADMIN' },
+      { name: 'expenses', label: 'Expenses', path: '/expenses', icon: 'Receipt', sortOrder: 10, requiresRole: 'ADMIN' },
+      { name: 'warranties', label: 'Warranties', path: '/warranties', icon: 'Security', sortOrder: 11, requiresRole: 'ADMIN' },
+      { name: 'users', label: 'Employee', path: '/users', icon: 'Person', sortOrder: 12, requiresRole: 'ADMIN' },
+      { name: 'salary-management', label: 'Salary & Advances', path: '/salary-management', icon: 'AttachMoney', sortOrder: 13, requiresRole: 'ADMIN' },
+      { name: 'permission-management', label: 'Permission', path: '/permission-management', icon: 'AdminPanelSettings', sortOrder: 14, requiresRole: 'SUPER_ADMIN' },
+      { name: 'settings', label: 'Settings', path: '/settings', icon: 'Settings', sortOrder: 15, requiresRole: 'ADMIN' },
     ];
 
     for (const menu of menus) {

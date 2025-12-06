@@ -55,20 +55,38 @@ export const getCustomerLedger = async (req: Request, res: Response) => {
 
     const total = await prisma.customerTransaction.count({ where });
 
-    // Calculate balance
-    const balance = await prisma.customerTransaction.aggregate({
+    // Calculate balance properly based on transaction type
+    // For customer ledger: balance represents how much the customer owes
+    // DEBIT = customer owes money (order created) - adds to balance
+    // CREDIT = payment received (reduces what customer owes) - subtracts from balance
+    const allTransactions = await prisma.customerTransaction.findMany({
       where: {
         customerId,
         isActive: true
       },
-      _sum: {
+      select: {
+        type: true,
         amount: true
+      }
+    });
+
+    let balance = 0;
+    allTransactions.forEach(transaction => {
+      const amount = Number(transaction.amount);
+      const transactionType = transaction.type;
+
+      if (transactionType === 'DEBIT') {
+        // DEBIT increases what customer owes
+        balance += amount;
+      } else if (transactionType === 'CREDIT') {
+        // CREDIT decreases what customer owes (payment received)
+        balance -= amount;
       }
     });
 
     return res.json({
       transactions,
-      balance: Number(balance._sum.amount || 0),
+      balance: balance,
       pagination: {
         page: Number(page),
         limit: Number(limit),
@@ -122,20 +140,38 @@ export const getSupplierLedger = async (req: Request, res: Response) => {
 
     const total = await prisma.supplierTransaction.count({ where });
 
-    // Calculate balance
-    const balance = await prisma.supplierTransaction.aggregate({
+    // Calculate balance properly based on transaction type
+    // For supplier ledger: balance represents how much the supplier owes
+    // CREDIT = supplier owes money (payable increases) - adds to balance
+    // DEBIT = payment made (payable decreases) - subtracts from balance
+    const allTransactions = await prisma.supplierTransaction.findMany({
       where: {
         supplierId,
         isActive: true
       },
-      _sum: {
+      select: {
+        type: true,
         amount: true
+      }
+    });
+
+    let balance = 0;
+    allTransactions.forEach(transaction => {
+      const amount = Number(transaction.amount);
+      const transactionType = transaction.type;
+
+      if (transactionType === 'CREDIT') {
+        // CREDIT increases what supplier owes
+        balance += amount;
+      } else if (transactionType === 'DEBIT') {
+        // DEBIT decreases what supplier owes (payment made)
+        balance -= amount;
       }
     });
 
     return res.json({
       transactions,
-      balance: Number(balance._sum.amount || 0),
+      balance: balance,
       pagination: {
         page: Number(page),
         limit: Number(limit),
@@ -182,19 +218,73 @@ export const getCompanyLedger = async (req: Request, res: Response) => {
 
     const total = await prisma.companyTransaction.count({ where });
 
-    // Calculate balance
-    const balance = await prisma.companyTransaction.aggregate({
+    // Calculate balance properly based on account type and transaction type
+    // For asset accounts (CASH, BANK): DEBIT increases, CREDIT decreases
+    // For liability/equity accounts (EQUITY): CREDIT increases, DEBIT decreases
+    // For revenue accounts (SALES): CREDIT increases, DEBIT decreases
+    // For expense accounts (EXPENSES, PURCHASES): DEBIT increases, CREDIT decreases
+    const allTransactions = await prisma.companyTransaction.findMany({
       where: {
         isActive: true
       },
-      _sum: {
+      select: {
+        accountType: true,
+        type: true,
         amount: true
+      }
+    });
+
+    let balance = 0;
+    allTransactions.forEach(transaction => {
+      const amount = Number(transaction.amount);
+      const accountType = transaction.accountType;
+      const transactionType = transaction.type;
+
+      // Asset accounts: DEBIT increases, CREDIT decreases
+      if (accountType === 'CASH' || accountType === 'BANK') {
+        if (transactionType === 'DEBIT') {
+          balance += amount;
+        } else {
+          balance -= amount;
+        }
+      }
+      // Liability/Equity accounts: CREDIT increases, DEBIT decreases
+      else if (accountType === 'EQUITY') {
+        if (transactionType === 'CREDIT') {
+          balance += amount;
+        } else {
+          balance -= amount;
+        }
+      }
+      // Revenue accounts: CREDIT increases, DEBIT decreases
+      else if (accountType === 'SALES') {
+        if (transactionType === 'CREDIT') {
+          balance += amount;
+        } else {
+          balance -= amount;
+        }
+      }
+      // Expense accounts: DEBIT increases, CREDIT decreases
+      else if (accountType === 'EXPENSES' || accountType === 'PURCHASES') {
+        if (transactionType === 'DEBIT') {
+          balance += amount;
+        } else {
+          balance -= amount;
+        }
+      }
+      // Default: treat as asset (DEBIT increases, CREDIT decreases)
+      else {
+        if (transactionType === 'DEBIT') {
+          balance += amount;
+        } else {
+          balance -= amount;
+        }
       }
     });
 
     return res.json({
       transactions,
-      balance: Number(balance._sum.amount || 0),
+      balance: balance,
       pagination: {
         page: Number(page),
         limit: Number(limit),
