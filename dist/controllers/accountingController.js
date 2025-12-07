@@ -185,55 +185,127 @@ const getCompanyLedger = async (req, res) => {
                 amount: true
             }
         });
-        let balance = 0;
+        if (accountType) {
+            let balance = 0;
+            allTransactions.forEach(transaction => {
+                const amount = Number(transaction.amount);
+                const transactionAccountType = transaction.accountType;
+                const transactionType = transaction.type;
+                if (transactionAccountType === 'CASH' || transactionAccountType === 'BANK') {
+                    if (transactionType === 'DEBIT') {
+                        balance += amount;
+                    }
+                    else {
+                        balance -= amount;
+                    }
+                }
+                else if (transactionAccountType === 'EQUITY') {
+                    if (transactionType === 'CREDIT') {
+                        balance += amount;
+                    }
+                    else {
+                        balance -= amount;
+                    }
+                }
+                else if (transactionAccountType === 'SALES') {
+                    if (transactionType === 'CREDIT') {
+                        balance += amount;
+                    }
+                    else {
+                        balance -= amount;
+                    }
+                }
+                else if (transactionAccountType === 'EXPENSES' || transactionAccountType === 'PURCHASES') {
+                    if (transactionType === 'DEBIT') {
+                        balance += amount;
+                    }
+                    else {
+                        balance -= amount;
+                    }
+                }
+                else {
+                    if (transactionType === 'DEBIT') {
+                        balance += amount;
+                    }
+                    else {
+                        balance -= amount;
+                    }
+                }
+            });
+            return res.json({
+                transactions,
+                balance: balance,
+                accountType: accountType,
+                pagination: {
+                    page: Number(page),
+                    limit: Number(limit),
+                    total,
+                    pages: Math.ceil(total / Number(limit))
+                }
+            });
+        }
+        const balancesByAccountType = {
+            CASH: 0,
+            BANK: 0,
+            EQUITY: 0,
+            SALES: 0,
+            EXPENSES: 0,
+            PURCHASES: 0
+        };
         allTransactions.forEach(transaction => {
             const amount = Number(transaction.amount);
             const transactionAccountType = transaction.accountType;
             const transactionType = transaction.type;
+            if (!balancesByAccountType.hasOwnProperty(transactionAccountType)) {
+                balancesByAccountType[transactionAccountType] = 0;
+            }
+            const currentBalance = balancesByAccountType[transactionAccountType] ?? 0;
             if (transactionAccountType === 'CASH' || transactionAccountType === 'BANK') {
                 if (transactionType === 'DEBIT') {
-                    balance += amount;
+                    balancesByAccountType[transactionAccountType] = currentBalance + amount;
                 }
                 else {
-                    balance -= amount;
+                    balancesByAccountType[transactionAccountType] = currentBalance - amount;
                 }
             }
             else if (transactionAccountType === 'EQUITY') {
                 if (transactionType === 'CREDIT') {
-                    balance += amount;
+                    balancesByAccountType[transactionAccountType] = currentBalance + amount;
                 }
                 else {
-                    balance -= amount;
+                    balancesByAccountType[transactionAccountType] = currentBalance - amount;
                 }
             }
             else if (transactionAccountType === 'SALES') {
                 if (transactionType === 'CREDIT') {
-                    balance += amount;
+                    balancesByAccountType[transactionAccountType] = currentBalance + amount;
                 }
                 else {
-                    balance -= amount;
+                    balancesByAccountType[transactionAccountType] = currentBalance - amount;
                 }
             }
             else if (transactionAccountType === 'EXPENSES' || transactionAccountType === 'PURCHASES') {
                 if (transactionType === 'DEBIT') {
-                    balance += amount;
+                    balancesByAccountType[transactionAccountType] = currentBalance + amount;
                 }
                 else {
-                    balance -= amount;
+                    balancesByAccountType[transactionAccountType] = currentBalance - amount;
                 }
             }
             else {
                 if (transactionType === 'DEBIT') {
-                    balance += amount;
+                    balancesByAccountType[transactionAccountType] = currentBalance + amount;
                 }
                 else {
-                    balance -= amount;
+                    balancesByAccountType[transactionAccountType] = currentBalance - amount;
                 }
             }
         });
+        const netAssets = (balancesByAccountType.CASH ?? 0) + (balancesByAccountType.BANK ?? 0);
         return res.json({
             transactions,
-            balance: balance,
+            balance: netAssets,
+            balancesByAccountType: balancesByAccountType,
             pagination: {
                 page: Number(page),
                 limit: Number(limit),
@@ -1202,10 +1274,9 @@ const findOrphanedTransactions = async (req, res) => {
             }
         });
         const existingOrders = await prisma.order.findMany({
-            select: { id: true, orderNumber: true }
+            select: { id: true }
         });
         const existingOrderIds = new Set(existingOrders.map(o => o.id));
-        const orderNumberMap = new Map(existingOrders.map(o => [o.id, o.orderNumber]));
         const orphanedCompanyTransactions = orderTransactions.filter(t => t.referenceId && !existingOrderIds.has(t.referenceId));
         const orphanedCustomerTransactions = customerOrderTransactions.filter(t => t.referenceId && !existingOrderIds.has(t.referenceId));
         return res.json({

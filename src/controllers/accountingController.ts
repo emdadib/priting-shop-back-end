@@ -325,50 +325,53 @@ export const getCompanyLedger = async (req: Request, res: Response) => {
         balancesByAccountType[transactionAccountType] = 0;
       }
 
+      // Get current balance (guaranteed to exist after initialization check)
+      const currentBalance = balancesByAccountType[transactionAccountType] ?? 0;
+
       // Asset accounts: DEBIT increases, CREDIT decreases
       if (transactionAccountType === 'CASH' || transactionAccountType === 'BANK') {
         if (transactionType === 'DEBIT') {
-          balancesByAccountType[transactionAccountType] += amount;
+          balancesByAccountType[transactionAccountType] = currentBalance + amount;
         } else {
-          balancesByAccountType[transactionAccountType] -= amount;
+          balancesByAccountType[transactionAccountType] = currentBalance - amount;
         }
       }
       // Liability/Equity accounts: CREDIT increases, DEBIT decreases
       else if (transactionAccountType === 'EQUITY') {
         if (transactionType === 'CREDIT') {
-          balancesByAccountType[transactionAccountType] += amount;
+          balancesByAccountType[transactionAccountType] = currentBalance + amount;
         } else {
-          balancesByAccountType[transactionAccountType] -= amount;
+          balancesByAccountType[transactionAccountType] = currentBalance - amount;
         }
       }
       // Revenue accounts: CREDIT increases, DEBIT decreases
       else if (transactionAccountType === 'SALES') {
         if (transactionType === 'CREDIT') {
-          balancesByAccountType[transactionAccountType] += amount;
+          balancesByAccountType[transactionAccountType] = currentBalance + amount;
         } else {
-          balancesByAccountType[transactionAccountType] -= amount;
+          balancesByAccountType[transactionAccountType] = currentBalance - amount;
         }
       }
       // Expense accounts: DEBIT increases, CREDIT decreases
       else if (transactionAccountType === 'EXPENSES' || transactionAccountType === 'PURCHASES') {
         if (transactionType === 'DEBIT') {
-          balancesByAccountType[transactionAccountType] += amount;
+          balancesByAccountType[transactionAccountType] = currentBalance + amount;
         } else {
-          balancesByAccountType[transactionAccountType] -= amount;
+          balancesByAccountType[transactionAccountType] = currentBalance - amount;
         }
       }
       // Default: treat as asset (DEBIT increases, CREDIT decreases)
       else {
         if (transactionType === 'DEBIT') {
-          balancesByAccountType[transactionAccountType] += amount;
+          balancesByAccountType[transactionAccountType] = currentBalance + amount;
         } else {
-          balancesByAccountType[transactionAccountType] -= amount;
+          balancesByAccountType[transactionAccountType] = currentBalance - amount;
         }
       }
     });
 
     // Calculate net assets (CASH + BANK - this represents actual cash/bank balance)
-    const netAssets = balancesByAccountType.CASH + balancesByAccountType.BANK;
+    const netAssets = (balancesByAccountType.CASH ?? 0) + (balancesByAccountType.BANK ?? 0);
 
     return res.json({
       transactions,
@@ -1546,10 +1549,9 @@ export const findOrphanedTransactions = async (req: Request, res: Response) => {
 
     // Get all existing order IDs
     const existingOrders = await prisma.order.findMany({
-      select: { id: true, orderNumber: true }
+      select: { id: true }
     });
     const existingOrderIds = new Set(existingOrders.map(o => o.id));
-    const orderNumberMap = new Map(existingOrders.map(o => [o.id, o.orderNumber]));
 
     // Find orphaned company transactions
     const orphanedCompanyTransactions = orderTransactions.filter(

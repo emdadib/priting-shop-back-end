@@ -1,0 +1,59 @@
+# Google Cloud Build configuration for Printing Shop Management System
+steps:
+  # Build and push Docker image for backend
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'build'
+      - '-t'
+      - 'gcr.io/$PROJECT_ID/printing-shop-backend:latest'
+      - '-f'
+      - 'Dockerfile.cloudrun'
+      - '.'
+
+  # Push Docker image to Container Registry
+  - name: 'gcr.io/cloud-builders/docker'
+    args:
+      - 'push'
+      - 'gcr.io/$PROJECT_ID/printing-shop-backend:latest'
+
+  # Deploy to Cloud Run
+  - name: 'gcr.io/google.com/cloudsdktool/cloud-sdk'
+    entrypoint: 'gcloud'
+    args:
+      - 'run'
+      - 'deploy'
+      - 'printing-shop-backend'
+      - '--image'
+      - 'gcr.io/$PROJECT_ID/printing-shop-backend:latest'
+      - '--region'
+      - 'asia-southeast1'
+      - '--platform'
+      - 'managed'
+      - '--allow-unauthenticated'
+      - '--port'
+      - '8080'
+      - '--memory'
+      - '1Gi'
+      - '--cpu'
+      - '1'
+      - '--max-instances'
+      - '10'
+      - '--min-instances'
+      - '0'
+      - '--timeout'
+      - '300'
+      - '--update-env-vars'
+      - 'NODE_ENV=production'
+      - '--remove-env-vars'
+      - 'DATABASE_URL,JWT_SECRET,JWT_REFRESH_SECRET'
+      - '--update-secrets'
+      - 'DATABASE_URL=DATABASE_URL:latest,JWT_SECRET=JWT_SECRET:latest,JWT_REFRESH_SECRET=JWT_REFRESH_SECRET:latest'
+
+# Store images in Google Container Registry
+images:
+  - 'gcr.io/$PROJECT_ID/printing-shop-backend:latest'
+
+# Build options
+options:
+  logging: CLOUD_LOGGING_ONLY
+  machineType: 'E2_HIGHCPU_8'
