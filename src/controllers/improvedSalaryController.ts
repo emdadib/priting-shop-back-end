@@ -253,34 +253,76 @@ export const markPaymentAsPaid = async (req: Request, res: Response): Promise<Re
       });
     }
 
-    const updatedPayment = await prisma.salaryPayment.update({
-      where: { id },
-      data: {
-        status: 'PAID',
-        paidBy: currentUser?.id,
-        paidAt: new Date(),
-        notes: notes || payment.notes
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-            role: true
-          }
+    // Calculate net salary amount (base + bonuses - deductions - advances)
+    const netSalaryAmount = Number(payment.amount) + 
+      (Number(payment.bonuses) || 0) - 
+      (Number(payment.deductions) || 0) - 
+      (Number(payment.advances) || 0);
+
+    // Update payment status and create accounting transaction in a single transaction
+    const result = await prisma.$transaction(async (tx) => {
+      const updatedPayment = await tx.salaryPayment.update({
+        where: { id },
+        data: {
+          status: 'PAID',
+          paidBy: currentUser?.id,
+          paidAt: new Date(),
+          notes: notes || payment.notes
         },
-        profile: true,
-        paidByUser: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true
+        include: {
+          user: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+              role: true
+            }
+          },
+          profile: true,
+          paidByUser: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true
+            }
           }
         }
-      }
+      });
+
+      // Create accounting transaction to record salary payment
+      // This reduces cash and records it as an expense
+      await tx.companyTransaction.create({
+        data: {
+          accountType: 'CASH', // Assuming salaries are paid from cash
+          type: 'CREDIT', // CREDIT decreases cash (money going out)
+          amount: netSalaryAmount,
+          description: `Salary Payment - ${updatedPayment.user.firstName} ${updatedPayment.user.lastName} (${payment.month}/${payment.year})`,
+          reference: `SALARY-${payment.id}`,
+          referenceType: 'ADJUSTMENT',
+          date: new Date(),
+          isActive: true
+        }
+      });
+
+      // Also record as expense
+      await tx.companyTransaction.create({
+        data: {
+          accountType: 'EXPENSES',
+          type: 'DEBIT', // DEBIT increases expenses
+          amount: netSalaryAmount,
+          description: `Employee Salary - ${updatedPayment.user.firstName} ${updatedPayment.user.lastName} (${payment.month}/${payment.year})`,
+          reference: `SALARY-${payment.id}`,
+          referenceType: 'ADJUSTMENT',
+          date: new Date(),
+          isActive: true
+        }
+      });
+
+      return updatedPayment;
     });
+
+    const updatedPayment = result;
 
     // Create audit log
     await createAuditLog({

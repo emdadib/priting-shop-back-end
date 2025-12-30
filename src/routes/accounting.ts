@@ -19,6 +19,7 @@ import {
   deleteExpenseCategory,
   depositProfit,
   withdrawProfit,
+  ownerWithdrawal,
   getProfitSummary,
   calculateAndRecordProfit,
   findOrphanedTransactions,
@@ -63,6 +64,7 @@ router.delete('/expense-categories/:id', deleteExpenseCategory);
 // Profit management routes
 router.post('/profit/deposit', depositProfit);
 router.post('/profit/withdraw', withdrawProfit);
+router.post('/owner/withdraw', ownerWithdrawal); // Simple owner cash withdrawal
 router.get('/profit/summary', getProfitSummary);
 router.post('/profit/calculate', calculateAndRecordProfit); // Calculate profit from sales automatically
 

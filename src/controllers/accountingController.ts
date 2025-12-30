@@ -529,23 +529,63 @@ export const getAccountingSummary = async (req: Request, res: Response) => {
       };
     }
 
-    // Customer balances
-    const customerBalances = await prisma.customerTransaction.groupBy({
-      by: ['customerId'],
+    // Get all customer transactions to calculate proper balances
+    const allCustomerTransactions = await prisma.customerTransaction.findMany({
       where,
-      _sum: {
+      select: {
+        customerId: true,
+        type: true,
         amount: true
       }
     });
 
-    // Supplier balances
-    const supplierBalances = await prisma.supplierTransaction.groupBy({
-      by: ['supplierId'],
+    // Calculate customer balances properly (DEBIT increases, CREDIT decreases)
+    const customerBalancesMap = new Map<string, number>();
+    allCustomerTransactions.forEach(transaction => {
+      const customerId = transaction.customerId;
+      const currentBalance = customerBalancesMap.get(customerId) || 0;
+      const amount = Number(transaction.amount);
+      
+      if (transaction.type === 'DEBIT') {
+        customerBalancesMap.set(customerId, currentBalance + amount);
+      } else if (transaction.type === 'CREDIT') {
+        customerBalancesMap.set(customerId, currentBalance - amount);
+      }
+    });
+
+    const customerBalances = Array.from(customerBalancesMap.entries()).map(([customerId, balance]) => ({
+      customerId,
+      balance
+    }));
+
+    // Get all supplier transactions to calculate proper balances
+    const allSupplierTransactions = await prisma.supplierTransaction.findMany({
       where,
-      _sum: {
+      select: {
+        supplierId: true,
+        type: true,
         amount: true
       }
     });
+
+    // Calculate supplier balances properly (CREDIT increases, DEBIT decreases)
+    const supplierBalancesMap = new Map<string, number>();
+    allSupplierTransactions.forEach(transaction => {
+      const supplierId = transaction.supplierId;
+      const currentBalance = supplierBalancesMap.get(supplierId) || 0;
+      const amount = Number(transaction.amount);
+      
+      if (transaction.type === 'CREDIT') {
+        supplierBalancesMap.set(supplierId, currentBalance + amount);
+      } else if (transaction.type === 'DEBIT') {
+        supplierBalancesMap.set(supplierId, currentBalance - amount);
+      }
+    });
+
+    const supplierBalances = Array.from(supplierBalancesMap.entries()).map(([supplierId, balance]) => ({
+      supplierId,
+      balance
+    }));
 
     // Company balances by account type
     const companyBalances = await prisma.companyTransaction.groupBy({
@@ -556,9 +596,9 @@ export const getAccountingSummary = async (req: Request, res: Response) => {
       }
     });
 
-    // Total receivables and payables
+    // Total receivables (sum of all customer balances - what customers owe us)
     const totalReceivables = customerBalances.reduce((sum, balance) => {
-      return sum + Number(balance._sum.amount || 0);
+      return sum + (balance.balance > 0 ? balance.balance : 0); // Only positive balances (what customers owe)
     }, 0);
 
     // Calculate actual payables from purchase orders (due amounts)
@@ -1097,6 +1137,61 @@ export const depositProfit = async (req: Request, res: Response) => {
   }
 };
 
+// Owner withdrawal - simple cash withdrawal without equity check
+export const ownerWithdrawal = async (req: Request, res: Response) => {
+  try {
+    const {
+      amount,
+      accountType = 'CASH', // Default to CASH
+      description,
+      reference,
+      date
+    } = req.body;
+
+    if (!amount || amount <= 0) {
+      return res.status(400).json({ error: 'Amount must be greater than 0' });
+    }
+
+    if (accountType !== 'CASH' && accountType !== 'BANK') {
+      return res.status(400).json({ error: 'Account type must be CASH or BANK' });
+    }
+
+    const transactionDate = date ? new Date(date) : new Date();
+    const withdrawalDescription = description || `Owner Withdrawal`;
+    const transactionReference = reference || `OWNER-WITHDRAW-${Date.now()}`;
+
+    // Create transaction to reduce cash
+    const result = await prisma.$transaction(async (tx) => {
+      // CREDIT cash/bank account (cash decreases)
+      const cashTransaction = await tx.companyTransaction.create({
+        data: {
+          accountType: accountType as 'CASH' | 'BANK',
+          type: 'CREDIT', // CREDIT decreases cash
+          amount: parseFloat(amount),
+          description: withdrawalDescription,
+          reference: transactionReference,
+          referenceType: 'ADJUSTMENT',
+          date: transactionDate,
+          isActive: true
+        }
+      });
+
+      return {
+        cashTransaction
+      };
+    });
+
+    return res.status(201).json({
+      success: true,
+      message: 'Owner withdrawal recorded successfully',
+      data: result
+    });
+  } catch (error) {
+    console.error('Error recording owner withdrawal:', error);
+    return res.status(500).json({ error: 'Failed to record owner withdrawal' });
+  }
+};
+
 // Withdraw profit/investor profit (cash decreases, equity decreases)
 export const withdrawProfit = async (req: Request, res: Response) => {
   try {
@@ -1209,7 +1304,7 @@ export const calculateAndRecordProfit = async (req: Request, res: Response) => {
     const periodEnd = new Date(endDate);
     periodEnd.setHours(23, 59, 59, 999); // End of day
 
-    // 1. Get all SALES revenue (CREDIT entries)
+    // 1. Get all SALES revenue (CREDIT entries) for the period
     const salesTransactions = await prisma.companyTransaction.findMany({
       where: {
         accountType: 'SALES',
@@ -1219,40 +1314,58 @@ export const calculateAndRecordProfit = async (req: Request, res: Response) => {
           gte: periodStart,
           lte: periodEnd
         }
+      },
+      select: {
+        id: true,
+        amount: true,
+        date: true,
+        referenceId: true,
+        reference: true,
+        referenceType: true
       }
     });
 
     const totalRevenue = salesTransactions.reduce((sum, t) => sum + Number(t.amount), 0);
 
-    // 2. Get Cost of Goods Sold (COGS) from completed orders
-    const completedOrders = await prisma.order.findMany({
-      where: {
-        status: 'COMPLETED',
-        createdAt: {
-          gte: periodStart,
-          lte: periodEnd
-        }
-      },
-      include: {
-        items: {
+    // 2. Get Cost of Goods Sold (COGS) from orders that have SALES transactions in this period
+    // Extract unique order IDs from sales transactions
+    const orderIdsFromSales = salesTransactions
+      .filter(t => t.referenceType === 'ORDER' && t.referenceId)
+      .map(t => t.referenceId)
+      .filter((id): id is string => id !== null);
+
+    // Get orders that generated revenue in this period
+    // Only query if we have order IDs from sales transactions
+    const ordersWithRevenue = orderIdsFromSales.length > 0
+      ? await prisma.order.findMany({
+          where: {
+            id: { in: orderIdsFromSales },
+            status: 'COMPLETED'
+          },
           include: {
-            product: {
+            items: {
               select: {
-                baseCostPrice: true
+                id: true,
+                quantity: true,
+                costPrice: true // Use actual costPrice from OrderItem, not baseCostPrice from Product
               }
             }
           }
-        }
-      }
-    });
+        })
+      : [];
 
-    // Calculate COGS
+    // Calculate COGS using actual costPrice from order items
+    // This ensures we use the cost at the time of sale, not the current base cost
     let totalCOGS = 0;
-    completedOrders.forEach(order => {
-      order.items.forEach(item => {
-        const itemCost = Number(item.product.baseCostPrice) * Number(item.quantity);
-        totalCOGS += itemCost;
-      });
+    ordersWithRevenue.forEach(order => {
+      if (order.items) {
+        order.items.forEach((item: { id: string; quantity: number; costPrice: any }) => {
+          // Use costPrice from OrderItem (actual cost at time of sale)
+          // costPrice is Decimal type from Prisma, convert to number
+          const itemCost = Number(item.costPrice) * Number(item.quantity);
+          totalCOGS += itemCost;
+        });
+      }
     });
 
     // 3. Get all operating expenses (EXPENSES account DEBIT entries)
@@ -1449,31 +1562,59 @@ export const getProfitSummary = async (req: Request, res: Response) => {
       }
     });
 
-    // Calculate totals
-    const deposits = equityTransactions
+    // Separate transactions by type:
+    // 1. Profit/Loss from operations (from calculateAndRecordProfit)
+    // 2. Manual deposits/withdrawals (from depositProfit/withdrawProfit)
+    
+    // Profit/Loss from operations
+    const profitLossTransactions = equityTransactions.filter(t => 
+      t.description.toLowerCase().includes('net profit') || 
+      t.description.toLowerCase().includes('net loss') ||
+      t.reference?.startsWith('PROFIT-CALC-')
+    );
+    
+    const operationalProfit = profitLossTransactions
+      .filter(t => t.type === 'CREDIT')
+      .reduce((sum, t) => sum + Number(t.amount), 0);
+    
+    const operationalLoss = profitLossTransactions
+      .filter(t => t.type === 'DEBIT')
+      .reduce((sum, t) => sum + Number(t.amount), 0);
+    
+    const netOperationalProfit = operationalProfit - operationalLoss;
+    
+    // Manual deposits/withdrawals (exclude profit/loss calculations)
+    const manualTransactions = equityTransactions.filter(t => 
+      !t.description.toLowerCase().includes('net profit') && 
+      !t.description.toLowerCase().includes('net loss') &&
+      !t.reference?.startsWith('PROFIT-CALC-')
+    );
+    
+    const deposits = manualTransactions
       .filter(t => t.type === 'CREDIT')
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
-    const withdrawals = equityTransactions
+    const withdrawals = manualTransactions
       .filter(t => t.type === 'DEBIT')
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
-    const netProfit = deposits - withdrawals;
+    // Total net profit = operational profit/loss + manual deposits - manual withdrawals
+    const netProfit = netOperationalProfit + deposits - withdrawals;
 
-    // Separate investor profit if applicable
-    const investorDeposits = equityTransactions
+    // Separate investor profit if applicable (from manual transactions only)
+    const investorDeposits = manualTransactions
       .filter(t => t.type === 'CREDIT' && t.description.toLowerCase().includes('investor'))
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
-    const investorWithdrawals = equityTransactions
+    const investorWithdrawals = manualTransactions
       .filter(t => t.type === 'DEBIT' && t.description.toLowerCase().includes('investor'))
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
-    const regularDeposits = equityTransactions
+    const regularDeposits = manualTransactions
       .filter(t => t.type === 'CREDIT' && !t.description.toLowerCase().includes('investor'))
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
-    const regularWithdrawals = equityTransactions
+    const regularWithdrawals = manualTransactions
       .filter(t => t.type === 'DEBIT' && !t.description.toLowerCase().includes('investor'))
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
@@ -1481,7 +1622,10 @@ export const getProfitSummary = async (req: Request, res: Response) => {
       total: {
         deposits,
         withdrawals,
-        netProfit
+        netProfit,
+        operationalProfit,
+        operationalLoss,
+        netOperationalProfit
       },
       regular: {
         deposits: regularDeposits,
@@ -1492,6 +1636,11 @@ export const getProfitSummary = async (req: Request, res: Response) => {
         deposits: investorDeposits,
         withdrawals: investorWithdrawals,
         netProfit: investorDeposits - investorWithdrawals
+      },
+      operational: {
+        profit: operationalProfit,
+        loss: operationalLoss,
+        net: netOperationalProfit
       },
       transactions: equityTransactions.map(t => ({
         id: t.id,

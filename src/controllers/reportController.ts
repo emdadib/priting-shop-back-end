@@ -381,83 +381,111 @@ export const getStaffReport = async (req: Request, res: Response): Promise<Respo
 export const getDashboardStats = async (req: Request, res: Response): Promise<Response | void> => {
   try {
     const today = new Date();
+    // Fix date calculation bug - create new Date objects to avoid mutation
+    const startOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 0, 0, 0, 0);
+    const endOfToday = new Date(today.getFullYear(), today.getMonth(), today.getDate(), 23, 59, 59, 999);
     const startOfMonth = new Date(today.getFullYear(), today.getMonth(), 1);
-    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0);
+    const endOfMonth = new Date(today.getFullYear(), today.getMonth() + 1, 0, 23, 59, 59, 999);
 
-    // Get today's stats
-    const todayOrders = await prisma.order.count({
-      where: {
-        createdAt: {
-          gte: new Date(today.setHours(0, 0, 0, 0)),
-          lte: new Date(today.setHours(23, 59, 59, 999))
-        }
-      }
-    });
-
-    const todaySales = await prisma.order.aggregate({
-      where: {
-        createdAt: {
-          gte: new Date(today.setHours(0, 0, 0, 0)),
-          lte: new Date(today.setHours(23, 59, 59, 999))
-        }
-      },
-      _sum: {
-        total: true
-      }
-    });
-
-    // Get this month's stats
-    const monthOrders = await prisma.order.count({
-      where: {
-        createdAt: {
-          gte: startOfMonth,
-          lte: endOfMonth
-        }
-      }
-    });
-
-    const monthSales = await prisma.order.aggregate({
-      where: {
-        createdAt: {
-          gte: startOfMonth,
-          lte: endOfMonth
-        }
-      },
-      _sum: {
-        total: true
-      }
-    });
-
-    // Get pending orders
-    const pendingOrders = await prisma.order.count({
-      where: {
-        status: 'PENDING'
-      }
-    });
-
-    // Get low stock alerts - use actual minStock values
-    const lowStockProducts = await prisma.inventory.findMany({
-      where: {
-        product: {
-          isActive: true,
-          hasInventory: true,
-          minStock: {
-            gt: 0
+    // Run all independent queries in parallel for better performance
+    const [
+      todayOrders,
+      todaySales,
+      monthOrders,
+      monthSales,
+      pendingOrders,
+      lowStockProducts,
+      recentOrders,
+      weeklySalesData,
+      orderStatusData
+    ] = await Promise.all([
+      // Get today's orders count
+      prisma.order.count({
+        where: {
+          createdAt: {
+            gte: startOfToday,
+            lte: endOfToday
           }
         }
-      },
-      include: {
-        product: {
-          select: {
-            id: true,
-            name: true,
-            sku: true,
-            minStock: true,
-            unit: true
+      }),
+      // Get today's sales total
+      prisma.order.aggregate({
+        where: {
+          createdAt: {
+            gte: startOfToday,
+            lte: endOfToday
+          }
+        },
+        _sum: {
+          total: true
+        }
+      }),
+      // Get this month's orders count
+      prisma.order.count({
+        where: {
+          createdAt: {
+            gte: startOfMonth,
+            lte: endOfMonth
           }
         }
-      }
-    });
+      }),
+      // Get this month's sales total
+      prisma.order.aggregate({
+        where: {
+          createdAt: {
+            gte: startOfMonth,
+            lte: endOfMonth
+          }
+        },
+        _sum: {
+          total: true
+        }
+      }),
+      // Get pending orders count
+      prisma.order.count({
+        where: {
+          status: 'PENDING'
+        }
+      }),
+      // Get low stock alerts - use actual minStock values
+      prisma.inventory.findMany({
+        where: {
+          product: {
+            isActive: true,
+            hasInventory: true,
+            minStock: {
+              gt: 0
+            }
+          }
+        },
+        include: {
+          product: {
+            select: {
+              id: true,
+              name: true,
+              sku: true,
+              minStock: true,
+              unit: true
+            }
+          }
+        }
+      }),
+      // Get recent orders
+      prisma.order.findMany({
+        take: 5,
+        include: {
+          customer: true,
+          user: true
+        },
+        orderBy: {
+          createdAt: 'desc'
+        }
+      }),
+      // Get weekly sales data for charts
+      getWeeklySalesData(),
+      // Get order status distribution for charts
+      getOrderStatusDistribution()
+    ]);
 
     // Filter items where quantity is less than or equal to minStock
     const filteredLowStockProducts = lowStockProducts.filter(item => 
@@ -473,24 +501,6 @@ export const getDashboardStats = async (req: Request, res: Response): Promise<Re
         minStock: item.product.minStock
       }))
     });
-
-    // Get recent orders
-    const recentOrders = await prisma.order.findMany({
-      take: 5,
-      include: {
-        customer: true,
-        user: true
-      },
-      orderBy: {
-        createdAt: 'desc'
-      }
-    });
-
-    // Get weekly sales data for charts
-    const weeklySalesData = await getWeeklySalesData();
-    
-    // Get order status distribution for charts
-    const orderStatusData = await getOrderStatusDistribution();
 
     res.json({
       success: true,
