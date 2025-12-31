@@ -751,32 +751,60 @@ export const addExpense = async (req: Request, res: Response) => {
       description,
       reference,
       expenseCategoryId,
-      date
+      date,
+      paymentMethod = 'CASH' // Default to CASH, can be 'CASH' or 'BANK'
     } = req.body;
 
-    const transaction = await prisma.companyTransaction.create({
-      data: {
-        accountType: accountType || 'EXPENSES',
-        type,
-        amount: parseFloat(amount),
-        description,
-        reference,
-        expenseCategoryId: expenseCategoryId || null,
-        date: date ? new Date(date) : new Date(),
-        isActive: true
-      },
-      include: {
-        expenseCategory: {
-          select: {
-            id: true,
-            name: true,
-            description: true
+    const expenseAmount = parseFloat(amount);
+    const transactionDate = date ? new Date(date) : new Date();
+    const expenseReference = reference || `EXPENSE-${Date.now()}`;
+    const expenseDescription = description || 'Expense';
+
+    // Create both transactions in a single database transaction to ensure consistency
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Create EXPENSES DEBIT transaction (records the expense)
+      const expenseTransaction = await tx.companyTransaction.create({
+        data: {
+          accountType: 'EXPENSES',
+          type: 'DEBIT',
+          amount: expenseAmount,
+          description: expenseDescription,
+          reference: expenseReference,
+          expenseCategoryId: expenseCategoryId || null,
+          date: transactionDate,
+          isActive: true
+        },
+        include: {
+          expenseCategory: {
+            select: {
+              id: true,
+              name: true,
+              description: true
+            }
           }
         }
-      }
+      });
+
+      // 2. Create CASH/BANK CREDIT transaction (decreases cash/bank)
+      const cashAccountType = (paymentMethod === 'BANK' ? 'BANK' : 'CASH') as 'CASH' | 'BANK';
+      await tx.companyTransaction.create({
+        data: {
+          accountType: cashAccountType,
+          type: 'CREDIT',
+          amount: expenseAmount,
+          description: `${expenseDescription} - Payment`,
+          reference: expenseReference,
+          referenceType: 'ADJUSTMENT',
+          referenceId: expenseTransaction.id,
+          date: transactionDate,
+          isActive: true
+        }
+      });
+
+      return expenseTransaction;
     });
 
-    return res.status(201).json(transaction);
+    return res.status(201).json(result);
   } catch (error) {
     console.error('Error adding expense:', error);
     return res.status(500).json({ error: 'Failed to add expense' });
@@ -794,32 +822,81 @@ export const updateExpense = async (req: Request, res: Response) => {
       description,
       reference,
       expenseCategoryId,
-      date
+      date,
+      paymentMethod = 'CASH'
     } = req.body;
 
-    const transaction = await prisma.companyTransaction.update({
-      where: { id },
-      data: {
-        accountType: accountType || 'EXPENSES',
-        type,
-        amount: parseFloat(amount),
-        description,
-        reference,
-        expenseCategoryId: expenseCategoryId || null,
-        date: date ? new Date(date) : new Date()
-      },
-      include: {
-        expenseCategory: {
-          select: {
-            id: true,
-            name: true,
-            description: true
+    const expenseAmount = parseFloat(amount);
+    const transactionDate = date ? new Date(date) : new Date();
+    const expenseDescription = description || 'Expense';
+
+    // Update both transactions in a single database transaction
+    const result = await prisma.$transaction(async (tx) => {
+      // 1. Update EXPENSES transaction
+      const expenseTransaction = await tx.companyTransaction.update({
+        where: { id },
+        data: {
+          accountType: 'EXPENSES',
+          type: 'DEBIT',
+          amount: expenseAmount,
+          description: expenseDescription,
+          reference,
+          expenseCategoryId: expenseCategoryId || null,
+          date: transactionDate
+        },
+        include: {
+          expenseCategory: {
+            select: {
+              id: true,
+              name: true,
+              description: true
+            }
           }
         }
+      });
+
+      // 2. Find and update the related CASH/BANK transaction
+      const cashAccountType = (paymentMethod === 'BANK' ? 'BANK' : 'CASH') as 'CASH' | 'BANK';
+      const relatedCashTransaction = await tx.companyTransaction.findFirst({
+        where: {
+          referenceId: id,
+          referenceType: 'ADJUSTMENT',
+          accountType: { in: ['CASH', 'BANK'] }
+        }
+      });
+
+      if (relatedCashTransaction) {
+        // Update existing cash transaction
+        await tx.companyTransaction.update({
+          where: { id: relatedCashTransaction.id },
+          data: {
+            accountType: cashAccountType,
+            amount: expenseAmount,
+            description: `${expenseDescription} - Payment`,
+            date: transactionDate
+          }
+        });
+      } else {
+        // Create new cash transaction if it doesn't exist (for old expenses)
+        await tx.companyTransaction.create({
+          data: {
+            accountType: cashAccountType,
+            type: 'CREDIT',
+            amount: expenseAmount,
+            description: `${expenseDescription} - Payment`,
+            reference: reference || expenseTransaction.reference,
+            referenceType: 'ADJUSTMENT',
+            referenceId: id,
+            date: transactionDate,
+            isActive: true
+          }
+        });
       }
+
+      return expenseTransaction;
     });
 
-    return res.json(transaction);
+    return res.json(result);
   } catch (error) {
     console.error('Error updating expense:', error);
     return res.status(500).json({ error: 'Failed to update expense' });
@@ -831,9 +908,29 @@ export const deleteExpense = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
-    await prisma.companyTransaction.update({
-      where: { id },
-      data: { isActive: false }
+    // Delete both transactions in a single database transaction
+    await prisma.$transaction(async (tx) => {
+      // 1. Mark EXPENSES transaction as inactive
+      await tx.companyTransaction.update({
+        where: { id },
+        data: { isActive: false }
+      });
+
+      // 2. Find and mark related CASH/BANK transaction as inactive
+      const relatedCashTransaction = await tx.companyTransaction.findFirst({
+        where: {
+          referenceId: id,
+          referenceType: 'ADJUSTMENT',
+          accountType: { in: ['CASH', 'BANK'] }
+        }
+      });
+
+      if (relatedCashTransaction) {
+        await tx.companyTransaction.update({
+          where: { id: relatedCashTransaction.id },
+          data: { isActive: false }
+        });
+      }
     });
 
     return res.json({ message: 'Expense deleted successfully' });
@@ -1568,8 +1665,8 @@ export const getProfitSummary = async (req: Request, res: Response) => {
     
     // Profit/Loss from operations
     const profitLossTransactions = equityTransactions.filter(t => 
-      t.description.toLowerCase().includes('net profit') || 
-      t.description.toLowerCase().includes('net loss') ||
+      (t.description?.toLowerCase().includes('net profit') ?? false) || 
+      (t.description?.toLowerCase().includes('net loss') ?? false) ||
       t.reference?.startsWith('PROFIT-CALC-')
     );
     
@@ -1585,8 +1682,8 @@ export const getProfitSummary = async (req: Request, res: Response) => {
     
     // Manual deposits/withdrawals (exclude profit/loss calculations)
     const manualTransactions = equityTransactions.filter(t => 
-      !t.description.toLowerCase().includes('net profit') && 
-      !t.description.toLowerCase().includes('net loss') &&
+      !(t.description?.toLowerCase().includes('net profit') ?? false) && 
+      !(t.description?.toLowerCase().includes('net loss') ?? false) &&
       !t.reference?.startsWith('PROFIT-CALC-')
     );
     
@@ -1603,19 +1700,19 @@ export const getProfitSummary = async (req: Request, res: Response) => {
 
     // Separate investor profit if applicable (from manual transactions only)
     const investorDeposits = manualTransactions
-      .filter(t => t.type === 'CREDIT' && t.description.toLowerCase().includes('investor'))
+      .filter(t => t.type === 'CREDIT' && (t.description?.toLowerCase().includes('investor') ?? false))
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
     const investorWithdrawals = manualTransactions
-      .filter(t => t.type === 'DEBIT' && t.description.toLowerCase().includes('investor'))
+      .filter(t => t.type === 'DEBIT' && (t.description?.toLowerCase().includes('investor') ?? false))
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
     const regularDeposits = manualTransactions
-      .filter(t => t.type === 'CREDIT' && !t.description.toLowerCase().includes('investor'))
+      .filter(t => t.type === 'CREDIT' && !(t.description?.toLowerCase().includes('investor') ?? false))
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
     const regularWithdrawals = manualTransactions
-      .filter(t => t.type === 'DEBIT' && !t.description.toLowerCase().includes('investor'))
+      .filter(t => t.type === 'DEBIT' && !(t.description?.toLowerCase().includes('investor') ?? false))
       .reduce((sum, t) => sum + Number(t.amount), 0);
 
     return res.json({
@@ -1798,15 +1895,167 @@ export const cleanupOrphanedTransactions = async (req: Request, res: Response) =
       });
     }
 
+    // Clean up orphaned payment transactions
+    // Get all existing payment IDs
+    const existingPayments = await prisma.payment.findMany({
+      select: { id: true }
+    });
+    const existingPaymentIds = new Set(existingPayments.map(p => p.id));
+
+    // Mark orphaned company transactions from payments as inactive
+    const orphanedPaymentCompanyTransactions = await prisma.companyTransaction.findMany({
+      where: {
+        referenceType: 'PAYMENT',
+        isActive: true
+      },
+      select: { id: true, referenceId: true }
+    });
+
+    const orphanedPaymentCompanyIds = orphanedPaymentCompanyTransactions
+      .filter(t => t.referenceId && !existingPaymentIds.has(t.referenceId))
+      .map(t => t.id);
+
+    if (orphanedPaymentCompanyIds.length > 0) {
+      await prisma.companyTransaction.updateMany({
+        where: {
+          id: { in: orphanedPaymentCompanyIds }
+        },
+        data: {
+          isActive: false
+        }
+      });
+    }
+
+    // Mark orphaned customer transactions from payments as inactive
+    const orphanedPaymentCustomerTransactions = await prisma.customerTransaction.findMany({
+      where: {
+        referenceType: 'PAYMENT',
+        isActive: true
+      },
+      select: { id: true, referenceId: true }
+    });
+
+    const orphanedPaymentCustomerIds = orphanedPaymentCustomerTransactions
+      .filter(t => t.referenceId && !existingPaymentIds.has(t.referenceId))
+      .map(t => t.id);
+
+    if (orphanedPaymentCustomerIds.length > 0) {
+      await prisma.customerTransaction.updateMany({
+        where: {
+          id: { in: orphanedPaymentCustomerIds }
+        },
+        data: {
+          isActive: false
+        }
+      });
+    }
+
     return res.json({
       success: true,
       message: 'Orphaned transactions cleaned up successfully',
       cleanedCompanyTransactions: orphanedCompanyIds.length,
       cleanedCustomerTransactions: orphanedCustomerIds.length,
-      totalCleaned: orphanedCompanyIds.length + orphanedCustomerIds.length
+      cleanedPaymentCompanyTransactions: orphanedPaymentCompanyIds.length,
+      cleanedPaymentCustomerTransactions: orphanedPaymentCustomerIds.length,
+      totalCleaned: orphanedCompanyIds.length + orphanedCustomerIds.length + orphanedPaymentCompanyIds.length + orphanedPaymentCustomerIds.length
     });
   } catch (error) {
     console.error('Error cleaning up orphaned transactions:', error);
     return res.status(500).json({ error: 'Failed to clean up orphaned transactions' });
+  }
+};
+
+// Delete all purchase order ledger entries from company ledger
+export const deletePurchaseOrderLedgerEntries = async (req: Request, res: Response) => {
+  try {
+    // Find all company transactions related to purchase orders
+    const purchaseOrderTransactions = await prisma.companyTransaction.findMany({
+      where: {
+        referenceType: 'PURCHASE_ORDER',
+        isActive: true
+      },
+      select: {
+        id: true,
+        accountType: true,
+        type: true,
+        amount: true,
+        description: true,
+        reference: true,
+        referenceId: true
+      }
+    });
+
+    const transactionIds = purchaseOrderTransactions.map(t => t.id);
+
+    if (transactionIds.length === 0) {
+      return res.json({
+        success: true,
+        message: 'No purchase order ledger entries found to delete',
+        deletedCount: 0
+      });
+    }
+
+    // Soft delete all purchase order company transactions
+    await prisma.companyTransaction.updateMany({
+      where: {
+        id: { in: transactionIds }
+      },
+      data: {
+        isActive: false
+      }
+    });
+
+    // Also soft delete supplier transactions related to purchase orders
+    const supplierTransactions = await prisma.supplierTransaction.findMany({
+      where: {
+        referenceType: 'PURCHASE_ORDER',
+        isActive: true
+      },
+      select: {
+        id: true
+      }
+    });
+
+    const supplierTransactionIds = supplierTransactions.map(t => t.id);
+
+    if (supplierTransactionIds.length > 0) {
+      await prisma.supplierTransaction.updateMany({
+        where: {
+          id: { in: supplierTransactionIds }
+        },
+        data: {
+          isActive: false
+        }
+      });
+    }
+
+    console.log('Purchase order ledger entries deleted:', {
+      companyTransactions: transactionIds.length,
+      supplierTransactions: supplierTransactionIds.length,
+      total: transactionIds.length + supplierTransactionIds.length
+    });
+
+    return res.json({
+      success: true,
+      message: 'Purchase order ledger entries deleted successfully',
+      deletedCompanyTransactions: transactionIds.length,
+      deletedSupplierTransactions: supplierTransactionIds.length,
+      totalDeleted: transactionIds.length + supplierTransactionIds.length,
+      details: {
+        companyTransactions: purchaseOrderTransactions.map(t => ({
+          accountType: t.accountType,
+          type: t.type,
+          amount: t.amount.toString(),
+          description: t.description,
+          reference: t.reference
+        }))
+      }
+    });
+  } catch (error) {
+    console.error('Error deleting purchase order ledger entries:', error);
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to delete purchase order ledger entries'
+    });
   }
 };

@@ -609,7 +609,7 @@ model CompanyTransaction {
   accountType   AccountType
   type          TransactionType
   amount        Decimal         @db.Decimal(10, 2)
-  description   String
+  description   String?
   reference     String?
   referenceType ReferenceType?
   referenceId   String?

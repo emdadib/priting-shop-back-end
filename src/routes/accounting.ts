@@ -23,7 +23,8 @@ import {
   getProfitSummary,
   calculateAndRecordProfit,
   findOrphanedTransactions,
-  cleanupOrphanedTransactions
+  cleanupOrphanedTransactions,
+  deletePurchaseOrderLedgerEntries
 } from '../controllers/accountingController';
 import { authenticateToken } from '../middleware/auth';
 
@@ -71,5 +72,8 @@ router.post('/profit/calculate', calculateAndRecordProfit); // Calculate profit 
 // Orphaned transactions management
 router.get('/orphaned-transactions', findOrphanedTransactions);
 router.post('/cleanup-orphaned-transactions', cleanupOrphanedTransactions);
+
+// Purchase order ledger cleanup
+router.post('/cleanup-purchase-order-ledger', deletePurchaseOrderLedgerEntries);
 
 export default router;

@@ -478,6 +478,38 @@ export const deleteOrder = async (req: Request, res: Response): Promise<Response
       }
     });
 
+    // Get all payments associated with this order before deleting them
+    const relatedPayments = await prisma.payment.findMany({
+      where: { orderId: id },
+      select: { id: true }
+    });
+
+    const paymentIds = relatedPayments.map(p => p.id);
+
+    // Soft delete company transactions related to payments (CASH/BANK transactions)
+    if (paymentIds.length > 0) {
+      await prisma.companyTransaction.updateMany({
+        where: {
+          referenceType: 'PAYMENT',
+          referenceId: { in: paymentIds }
+        },
+        data: {
+          isActive: false // Soft delete - mark as inactive instead of hard delete
+        }
+      });
+
+      // Soft delete customer transactions related to payments
+      await prisma.customerTransaction.updateMany({
+        where: {
+          referenceType: 'PAYMENT',
+          referenceId: { in: paymentIds }
+        },
+        data: {
+          isActive: false // Soft delete - mark as inactive instead of hard delete
+        }
+      });
+    }
+
     // Delete related payments (if any)
     await prisma.payment.deleteMany({
       where: { orderId: id }

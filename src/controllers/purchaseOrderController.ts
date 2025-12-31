@@ -535,20 +535,116 @@ export const deletePurchaseOrder = async (req: Request, res: Response) => {
   try {
     const { id } = req.params;
 
+    // Get the purchase order first to check if it exists
+    const existingOrder = await prisma.purchaseOrder.findUnique({
+      where: { id },
+      include: {
+        supplier: true
+      }
+    });
+
+    if (!existingOrder) {
+      return res.status(404).json({
+        success: false,
+        message: 'Purchase order not found'
+      });
+    }
+
+    // Get all payments associated with this purchase order (via notes containing PO number)
+    const relatedPayments = await prisma.payment.findMany({
+      where: {
+        supplierId: existingOrder.supplierId,
+        notes: {
+          contains: existingOrder.poNumber
+        }
+      },
+      select: { id: true }
+    });
+
+    const paymentIds = relatedPayments.map(p => p.id);
+
+    // Soft delete company transactions related to payments (CASH/BANK transactions from supplier payments)
+    if (paymentIds.length > 0) {
+      await prisma.companyTransaction.updateMany({
+        where: {
+          referenceType: 'PAYMENT',
+          referenceId: { in: paymentIds }
+        },
+        data: {
+          isActive: false // Soft delete - mark as inactive instead of hard delete
+        }
+      });
+
+      // Soft delete supplier transactions related to payments
+      await prisma.supplierTransaction.updateMany({
+        where: {
+          referenceType: 'PAYMENT',
+          referenceId: { in: paymentIds }
+        },
+        data: {
+          isActive: false // Soft delete - mark as inactive instead of hard delete
+        }
+      });
+    }
+
+    // Soft delete supplier transactions related to the purchase order
+    await prisma.supplierTransaction.updateMany({
+      where: {
+        referenceType: 'PURCHASE_ORDER',
+        referenceId: id
+      },
+      data: {
+        isActive: false // Soft delete - mark as inactive instead of hard delete
+      }
+    });
+
+    // Soft delete company transactions related to the purchase order
+    await prisma.companyTransaction.updateMany({
+      where: {
+        referenceType: 'PURCHASE_ORDER',
+        referenceId: id
+      },
+      data: {
+        isActive: false // Soft delete - mark as inactive instead of hard delete
+      }
+    });
+
     // Delete items first due to foreign key constraint
     await prisma.purchaseOrderItem.deleteMany({
       where: { purchaseOrderId: id }
     });
+
+    // Delete related payments (if any)
+    if (paymentIds.length > 0) {
+      await prisma.payment.deleteMany({
+        where: {
+          id: { in: paymentIds }
+        }
+      });
+    }
 
     // Then delete the purchase order
     await prisma.purchaseOrder.delete({
       where: { id }
     });
 
-    return res.json({ message: 'Purchase order deleted successfully' });
+    console.log('Purchase order and related transactions deleted successfully:', {
+      purchaseOrderId: id,
+      poNumber: existingOrder.poNumber,
+      transactionsSoftDeleted: true,
+      paymentsDeleted: paymentIds.length
+    });
+
+    return res.json({
+      success: true,
+      message: 'Purchase order deleted successfully'
+    });
   } catch (error) {
     console.error('Error deleting purchase order:', error);
-    return res.status(500).json({ error: 'Failed to delete purchase order' });
+    return res.status(500).json({
+      success: false,
+      error: 'Failed to delete purchase order'
+    });
   }
 };
 

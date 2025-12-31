@@ -82,11 +82,11 @@ export const recordSupplierPayment = async (req: Request, res: Response): Promis
       }
     });
 
-    // Create company transaction (DEBIT - cash/bank decreases)
+    // Create company transaction (CREDIT - cash/bank decreases)
     await prisma.companyTransaction.create({
       data: {
         accountType: paymentMethod === 'CASH' ? 'CASH' : 'BANK',
-        type: 'DEBIT',
+        type: 'CREDIT',
         amount: paymentAmount,
         description: `Payment to ${purchaseOrder.supplier.name} - PO ${purchaseOrder.poNumber}`,
         reference: purchaseOrder.poNumber,
