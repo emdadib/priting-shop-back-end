@@ -161,12 +161,18 @@ export const createSalaryAdvance = async (req: Request, res: Response): Promise<
       });
     }
 
-    // Check if there's a salary record for current month/year
+    // Check salary using improved salary system (EmployeeSalaryProfile and SalaryPayment)
     const currentDate = new Date();
     const currentMonth = currentDate.getMonth() + 1;
     const currentYear = currentDate.getFullYear();
 
-    const existingSalary = await prisma.salary.findUnique({
+    // Get employee salary profile (base salary)
+    const salaryProfile = await prisma.employeeSalaryProfile.findUnique({
+      where: { userId, isActive: true }
+    });
+
+    // Get salary payment for current month/year if it exists
+    const existingPayment = await prisma.salaryPayment.findUnique({
       where: {
         userId_month_year: {
           userId,
@@ -194,9 +200,26 @@ export const createSalaryAdvance = async (req: Request, res: Response): Promise<
     const totalAdvancesAmount = Number(totalAdvances._sum.amount || 0);
     const requestedAmount = parseFloat(amount);
 
+    // Determine available salary amount
+    let availableSalary = 0;
+    
+    if (existingPayment) {
+      // If payment exists, use payment amount (base + bonuses - deductions)
+      const paymentAmount = Number(existingPayment.amount);
+      const bonuses = Number(existingPayment.bonuses || 0);
+      const deductions = Number(existingPayment.deductions || 0);
+      availableSalary = paymentAmount + bonuses - deductions;
+    } else if (salaryProfile) {
+      // If no payment exists yet, use base salary from profile
+      availableSalary = Number(salaryProfile.baseSalary);
+    } else {
+      // No salary profile found - allow advance but warn
+      console.log(`No salary profile found for user ${userId}`);
+    }
+
     // Check if advance amount is within salary limit
-    if (existingSalary) {
-      const remainingSalary = Number(existingSalary.amount) - totalAdvancesAmount;
+    if (availableSalary > 0) {
+      const remainingSalary = availableSalary - totalAdvancesAmount;
       if (requestedAmount > remainingSalary) {
         return res.status(400).json({
           success: false,
@@ -204,8 +227,8 @@ export const createSalaryAdvance = async (req: Request, res: Response): Promise<
         });
       }
     } else {
-      // If no salary record exists, we'll allow advance but create a note
-      console.log(`No salary record found for user ${userId} for ${currentMonth}/${currentYear}`);
+      // If no salary profile exists, we'll allow advance but create a note
+      console.log(`No salary profile or payment found for user ${userId} for ${currentMonth}/${currentYear}. Allowing advance without limit check.`);
     }
 
     const advance = await prisma.salaryAdvance.create({
@@ -411,7 +434,56 @@ export const paySalaryAdvance = async (req: Request, res: Response): Promise<Res
         }
       });
 
-      // Update or create salary record with advance amount
+      // Update or create salary payment record with advance amount (improved salary system)
+      const existingPayment = await tx.salaryPayment.findUnique({
+        where: {
+          userId_month_year: {
+            userId: existingAdvance.userId,
+            month: currentMonth,
+            year: currentYear
+          }
+        }
+      });
+
+      if (existingPayment) {
+        // Update existing payment with advance amount
+        await tx.salaryPayment.update({
+          where: {
+            userId_month_year: {
+              userId: existingAdvance.userId,
+              month: currentMonth,
+              year: currentYear
+            }
+          },
+          data: {
+            advances: {
+              increment: advanceAmount
+            }
+          }
+        });
+      } else {
+        // Get employee salary profile to create payment record
+        const salaryProfile = await tx.employeeSalaryProfile.findUnique({
+          where: { userId: existingAdvance.userId, isActive: true }
+        });
+
+        if (salaryProfile) {
+          // Create new payment record with advance amount
+          await tx.salaryPayment.create({
+            data: {
+              userId: existingAdvance.userId,
+              profileId: salaryProfile.id,
+              amount: salaryProfile.baseSalary, // Use base salary
+              month: currentMonth,
+              year: currentYear,
+              advances: advanceAmount,
+              status: 'PENDING'
+            }
+          });
+        }
+      }
+
+      // Also update old Salary model for backward compatibility (if it exists)
       const existingSalary = await tx.salary.findUnique({
         where: {
           userId_month_year: {
@@ -435,17 +507,6 @@ export const paySalaryAdvance = async (req: Request, res: Response): Promise<Res
             advances: {
               increment: advanceAmount
             }
-          }
-        });
-      } else {
-        await tx.salary.create({
-          data: {
-            userId: existingAdvance.userId,
-            amount: 0, // Will be updated when salary is set
-            month: currentMonth,
-            year: currentYear,
-            advances: advanceAmount,
-            status: 'PENDING'
           }
         });
       }
