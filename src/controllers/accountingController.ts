@@ -188,7 +188,7 @@ export const getSupplierLedger = async (req: Request, res: Response) => {
 // Get company ledger (self accounting)
 export const getCompanyLedger = async (req: Request, res: Response) => {
   try {
-    const { startDate, endDate, page = 1, limit = 50, accountType } = req.query;
+    const { startDate, endDate, page = 1, limit = 50, accountType, transactionType } = req.query;
 
     const skip = (Number(page) - 1) * Number(limit);
 
@@ -200,8 +200,12 @@ export const getCompanyLedger = async (req: Request, res: Response) => {
       where.accountType = accountType;
     }
 
+    if (transactionType) {
+      where.type = transactionType;
+    }
+
     if (startDate && endDate) {
-      where.createdAt = {
+      where.date = {
         gte: new Date(startDate as string),
         lte: new Date(endDate as string)
       };
@@ -210,7 +214,7 @@ export const getCompanyLedger = async (req: Request, res: Response) => {
     const transactions = await prisma.companyTransaction.findMany({
       where,
       orderBy: {
-        createdAt: 'desc'
+        date: 'desc'
       },
       skip,
       take: Number(limit)

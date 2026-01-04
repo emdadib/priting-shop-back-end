@@ -251,19 +251,34 @@ export const createPurchaseOrder = async (req: Request, res: Response) => {
     });
 
     // Create company ledger transaction for purchase cost (DEBIT - expense increases)
-    await prisma.companyTransaction.create({
-      data: {
+    // Check if transaction already exists to prevent duplicates
+    const existingPurchaseCostTransaction = await prisma.companyTransaction.findFirst({
+      where: {
+        referenceId: purchaseOrder.id,
+        referenceType: 'PURCHASE_ORDER',
         accountType: 'PURCHASES',
         type: 'DEBIT',
-        amount: parseFloat(total || 0),
-        description: `Purchase Cost - Order ${poNumber}`,
-        reference: poNumber,
-        referenceType: 'PURCHASE_ORDER',
-        referenceId: purchaseOrder.id,
-        date: new Date(),
         isActive: true
       }
     });
+
+    if (!existingPurchaseCostTransaction) {
+      await prisma.companyTransaction.create({
+        data: {
+          accountType: 'PURCHASES',
+          type: 'DEBIT',
+          amount: parseFloat(total || 0),
+          description: `Purchase Cost - Order ${poNumber}`,
+          reference: poNumber,
+          referenceType: 'PURCHASE_ORDER',
+          referenceId: purchaseOrder.id,
+          date: new Date(),
+          isActive: true
+        }
+      });
+    } else {
+      console.log(`Purchase cost transaction already exists for PO ${poNumber}, skipping duplicate creation`);
+    }
 
     return res.status(201).json(purchaseOrder);
   } catch (error) {
@@ -488,14 +503,18 @@ export const updatePurchaseOrderStatus = async (req: Request, res: Response) => 
         });
 
         // Also create company transaction for purchase cost if it doesn't exist
-        const existingCompanyTransaction = await prisma.companyTransaction.findFirst({
+        // Check specifically for PURCHASES DEBIT entries to avoid duplicates
+        const existingPurchaseCostTransaction = await prisma.companyTransaction.findFirst({
           where: {
             referenceId: existingOrder.id,
-            referenceType: 'PURCHASE_ORDER'
+            referenceType: 'PURCHASE_ORDER',
+            accountType: 'PURCHASES',
+            type: 'DEBIT',
+            isActive: true
           }
         });
 
-        if (!existingCompanyTransaction) {
+        if (!existingPurchaseCostTransaction) {
           await prisma.companyTransaction.create({
             data: {
               accountType: 'PURCHASES',
@@ -509,6 +528,8 @@ export const updatePurchaseOrderStatus = async (req: Request, res: Response) => 
               isActive: true
             }
           });
+        } else {
+          console.log(`Purchase cost transaction already exists for PO ${existingOrder.poNumber}, skipping duplicate creation`);
         }
 
         console.log('Supplier transaction created for received purchase order:', existingOrder.poNumber);
