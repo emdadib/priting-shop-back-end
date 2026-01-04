@@ -347,7 +347,18 @@ export const paySalaryAdvance = async (req: Request, res: Response): Promise<Res
     const currentUser = req.user;
 
     const existingAdvance = await prisma.salaryAdvance.findUnique({
-      where: { id }
+      where: { id },
+      include: {
+        user: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            role: true
+          }
+        }
+      }
     });
 
     if (!existingAdvance) {
@@ -364,77 +375,112 @@ export const paySalaryAdvance = async (req: Request, res: Response): Promise<Res
       });
     }
 
-    const updatedAdvance = await prisma.salaryAdvance.update({
-      where: { id },
-      data: {
-        status: 'PAID',
-        paidBy: currentUser?.id,
-        paidAt: new Date(),
-        notes: notes || existingAdvance.notes
-      },
-      include: {
-        user: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-            email: true,
-            role: true
-          }
-        },
-        paidByUser: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true
-          }
-        }
-      }
-    });
-
-    // Update salary record with advance amount
+    const advanceAmount = Number(existingAdvance.amount);
     const currentDate = new Date();
     const currentMonth = currentDate.getMonth() + 1;
     const currentYear = currentDate.getFullYear();
 
-    // Update or create salary record with advance amount
-    const existingSalary = await prisma.salary.findUnique({
-      where: {
-        userId_month_year: {
-          userId: existingAdvance.userId,
-          month: currentMonth,
-          year: currentYear
+    // Update advance, salary record, and create accounting transactions in a single transaction
+    const result = await prisma.$transaction(async (tx) => {
+      // Update advance status
+      const updatedAdvance = await tx.salaryAdvance.update({
+        where: { id },
+        data: {
+          status: 'PAID',
+          paidBy: currentUser?.id,
+          paidAt: new Date(),
+          notes: notes || existingAdvance.notes
+        },
+        include: {
+          user: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+              role: true
+            }
+          },
+          paidByUser: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true
+            }
+          }
         }
-      }
-    });
+      });
 
-    if (existingSalary) {
-      await prisma.salary.update({
+      // Update or create salary record with advance amount
+      const existingSalary = await tx.salary.findUnique({
         where: {
           userId_month_year: {
             userId: existingAdvance.userId,
             month: currentMonth,
             year: currentYear
           }
-        },
-        data: {
-          advances: {
-            increment: Number(existingAdvance.amount)
+        }
+      });
+
+      if (existingSalary) {
+        await tx.salary.update({
+          where: {
+            userId_month_year: {
+              userId: existingAdvance.userId,
+              month: currentMonth,
+              year: currentYear
+            }
+          },
+          data: {
+            advances: {
+              increment: advanceAmount
+            }
           }
-        }
-      });
-    } else {
-      await prisma.salary.create({
+        });
+      } else {
+        await tx.salary.create({
+          data: {
+            userId: existingAdvance.userId,
+            amount: 0, // Will be updated when salary is set
+            month: currentMonth,
+            year: currentYear,
+            advances: advanceAmount,
+            status: 'PENDING'
+          }
+        });
+      }
+
+      // Create accounting transaction to record salary advance payment
+      // This reduces cash and records it as an expense
+      await tx.companyTransaction.create({
         data: {
-          userId: existingAdvance.userId,
-          amount: 0, // Will be updated when salary is set
-          month: currentMonth,
-          year: currentYear,
-          advances: Number(existingAdvance.amount),
-          status: 'PENDING'
+          accountType: 'CASH', // Assuming advances are paid from cash
+          type: 'CREDIT', // CREDIT decreases cash (money going out)
+          amount: advanceAmount,
+          description: `Salary Advance Payment - ${existingAdvance.user.firstName} ${existingAdvance.user.lastName}`,
+          reference: `ADVANCE-${id}`,
+          referenceType: 'ADJUSTMENT',
+          date: new Date(),
+          isActive: true
         }
       });
-    }
+
+      // Also record as expense
+      await tx.companyTransaction.create({
+        data: {
+          accountType: 'EXPENSES',
+          type: 'DEBIT', // DEBIT increases expenses
+          amount: advanceAmount,
+          description: `Employee Salary Advance - ${existingAdvance.user.firstName} ${existingAdvance.user.lastName}`,
+          reference: `ADVANCE-${id}`,
+          referenceType: 'ADJUSTMENT',
+          date: new Date(),
+          isActive: true
+        }
+      });
+
+      return updatedAdvance;
+    });
 
     // Create audit log
     await createAuditLog({
@@ -458,7 +504,7 @@ export const paySalaryAdvance = async (req: Request, res: Response): Promise<Res
 
     res.json({
       success: true,
-      data: updatedAdvance
+      data: result
     });
   } catch (error) {
     console.error('Pay salary advance error:', error);
