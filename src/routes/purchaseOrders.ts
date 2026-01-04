@@ -7,7 +7,8 @@ import {
   updatePurchaseOrderStatus,
   deletePurchaseOrder,
   getPurchaseOrderStats,
-  getPurchaseOrdersBySupplier
+  getPurchaseOrdersBySupplier,
+  getPurchaseOrdersWithDueAmount
 } from '../controllers/purchaseOrderController';
 import { authenticateToken } from '../middleware/auth';
 
@@ -19,6 +20,7 @@ router.use(authenticateToken);
 // Purchase order routes
 router.get('/', getAllPurchaseOrders);
 router.get('/stats', getPurchaseOrderStats);
+router.get('/with-due-amount', getPurchaseOrdersWithDueAmount);
 router.get('/supplier/:supplierId', getPurchaseOrdersBySupplier);
 router.get('/:id', getPurchaseOrderById);
 router.post('/', createPurchaseOrder);

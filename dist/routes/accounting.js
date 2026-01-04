@@ -27,9 +27,11 @@ router.put('/expense-categories/:id', accountingController_1.updateExpenseCatego
 router.delete('/expense-categories/:id', accountingController_1.deleteExpenseCategory);
 router.post('/profit/deposit', accountingController_1.depositProfit);
 router.post('/profit/withdraw', accountingController_1.withdrawProfit);
+router.post('/owner/withdraw', accountingController_1.ownerWithdrawal);
 router.get('/profit/summary', accountingController_1.getProfitSummary);
 router.post('/profit/calculate', accountingController_1.calculateAndRecordProfit);
 router.get('/orphaned-transactions', accountingController_1.findOrphanedTransactions);
 router.post('/cleanup-orphaned-transactions', accountingController_1.cleanupOrphanedTransactions);
+router.post('/cleanup-purchase-order-ledger', accountingController_1.deletePurchaseOrderLedgerEntries);
 exports.default = router;
 //# sourceMappingURL=accounting.js.map

@@ -152,7 +152,10 @@ const createSalaryAdvance = async (req, res) => {
         const currentDate = new Date();
         const currentMonth = currentDate.getMonth() + 1;
         const currentYear = currentDate.getFullYear();
-        const existingSalary = await prisma.salary.findUnique({
+        const salaryProfile = await prisma.employeeSalaryProfile.findUnique({
+            where: { userId, isActive: true }
+        });
+        const existingPayment = await prisma.salaryPayment.findUnique({
             where: {
                 userId_month_year: {
                     userId,
@@ -176,8 +179,21 @@ const createSalaryAdvance = async (req, res) => {
         });
         const totalAdvancesAmount = Number(totalAdvances._sum.amount || 0);
         const requestedAmount = parseFloat(amount);
-        if (existingSalary) {
-            const remainingSalary = Number(existingSalary.amount) - totalAdvancesAmount;
+        let availableSalary = 0;
+        if (existingPayment) {
+            const paymentAmount = Number(existingPayment.amount);
+            const bonuses = Number(existingPayment.bonuses || 0);
+            const deductions = Number(existingPayment.deductions || 0);
+            availableSalary = paymentAmount + bonuses - deductions;
+        }
+        else if (salaryProfile) {
+            availableSalary = Number(salaryProfile.baseSalary);
+        }
+        else {
+            console.log(`No salary profile found for user ${userId}`);
+        }
+        if (availableSalary > 0) {
+            const remainingSalary = availableSalary - totalAdvancesAmount;
             if (requestedAmount > remainingSalary) {
                 return res.status(400).json({
                     success: false,
@@ -186,7 +202,7 @@ const createSalaryAdvance = async (req, res) => {
             }
         }
         else {
-            console.log(`No salary record found for user ${userId} for ${currentMonth}/${currentYear}`);
+            console.log(`No salary profile or payment found for user ${userId} for ${currentMonth}/${currentYear}. Allowing advance without limit check.`);
         }
         const advance = await prisma.salaryAdvance.create({
             data: {
@@ -316,7 +332,18 @@ const paySalaryAdvance = async (req, res) => {
         const { notes } = req.body;
         const currentUser = req.user;
         const existingAdvance = await prisma.salaryAdvance.findUnique({
-            where: { id }
+            where: { id },
+            include: {
+                user: {
+                    select: {
+                        id: true,
+                        firstName: true,
+                        lastName: true,
+                        email: true,
+                        role: true
+                    }
+                }
+            }
         });
         if (!existingAdvance) {
             return res.status(404).json({
@@ -330,73 +357,132 @@ const paySalaryAdvance = async (req, res) => {
                 message: 'Only approved advances can be paid'
             });
         }
-        const updatedAdvance = await prisma.salaryAdvance.update({
-            where: { id },
-            data: {
-                status: 'PAID',
-                paidBy: currentUser?.id,
-                paidAt: new Date(),
-                notes: notes || existingAdvance.notes
-            },
-            include: {
-                user: {
-                    select: {
-                        id: true,
-                        firstName: true,
-                        lastName: true,
-                        email: true,
-                        role: true
-                    }
-                },
-                paidByUser: {
-                    select: {
-                        id: true,
-                        firstName: true,
-                        lastName: true
-                    }
-                }
-            }
-        });
+        const advanceAmount = Number(existingAdvance.amount);
         const currentDate = new Date();
         const currentMonth = currentDate.getMonth() + 1;
         const currentYear = currentDate.getFullYear();
-        const existingSalary = await prisma.salary.findUnique({
-            where: {
-                userId_month_year: {
-                    userId: existingAdvance.userId,
-                    month: currentMonth,
-                    year: currentYear
+        const result = await prisma.$transaction(async (tx) => {
+            const updatedAdvance = await tx.salaryAdvance.update({
+                where: { id },
+                data: {
+                    status: 'PAID',
+                    paidBy: currentUser?.id,
+                    paidAt: new Date(),
+                    notes: notes || existingAdvance.notes
+                },
+                include: {
+                    user: {
+                        select: {
+                            id: true,
+                            firstName: true,
+                            lastName: true,
+                            email: true,
+                            role: true
+                        }
+                    },
+                    paidByUser: {
+                        select: {
+                            id: true,
+                            firstName: true,
+                            lastName: true
+                        }
+                    }
                 }
-            }
-        });
-        if (existingSalary) {
-            await prisma.salary.update({
+            });
+            const existingPayment = await tx.salaryPayment.findUnique({
                 where: {
                     userId_month_year: {
                         userId: existingAdvance.userId,
                         month: currentMonth,
                         year: currentYear
                     }
-                },
-                data: {
-                    advances: {
-                        increment: Number(existingAdvance.amount)
+                }
+            });
+            if (existingPayment) {
+                await tx.salaryPayment.update({
+                    where: {
+                        userId_month_year: {
+                            userId: existingAdvance.userId,
+                            month: currentMonth,
+                            year: currentYear
+                        }
+                    },
+                    data: {
+                        advances: {
+                            increment: advanceAmount
+                        }
+                    }
+                });
+            }
+            else {
+                const salaryProfile = await tx.employeeSalaryProfile.findUnique({
+                    where: { userId: existingAdvance.userId, isActive: true }
+                });
+                if (salaryProfile) {
+                    await tx.salaryPayment.create({
+                        data: {
+                            userId: existingAdvance.userId,
+                            profileId: salaryProfile.id,
+                            amount: salaryProfile.baseSalary,
+                            month: currentMonth,
+                            year: currentYear,
+                            advances: advanceAmount,
+                            status: 'PENDING'
+                        }
+                    });
+                }
+            }
+            const existingSalary = await tx.salary.findUnique({
+                where: {
+                    userId_month_year: {
+                        userId: existingAdvance.userId,
+                        month: currentMonth,
+                        year: currentYear
                     }
                 }
             });
-        }
-        else {
-            await prisma.salary.create({
+            if (existingSalary) {
+                await tx.salary.update({
+                    where: {
+                        userId_month_year: {
+                            userId: existingAdvance.userId,
+                            month: currentMonth,
+                            year: currentYear
+                        }
+                    },
+                    data: {
+                        advances: {
+                            increment: advanceAmount
+                        }
+                    }
+                });
+            }
+            await tx.companyTransaction.create({
                 data: {
-                    userId: existingAdvance.userId,
-                    amount: 0,
-                    month: currentMonth,
-                    year: currentYear,
-                    advances: Number(existingAdvance.amount),
-                    status: 'PENDING'
+                    accountType: 'CASH',
+                    type: 'CREDIT',
+                    amount: advanceAmount,
+                    description: `Salary Advance Payment - ${existingAdvance.user.firstName} ${existingAdvance.user.lastName}`,
+                    reference: `ADVANCE-${id}`,
+                    referenceType: 'ADJUSTMENT',
+                    date: new Date(),
+                    isActive: true
                 }
             });
-        }
+            await tx.companyTransaction.create({
+                data: {
+                    accountType: 'EXPENSES',
+                    type: 'DEBIT',
+                    amount: advanceAmount,
+                    description: `Employee Salary Advance - ${existingAdvance.user.firstName} ${existingAdvance.user.lastName}`,
+                    reference: `ADVANCE-${id}`,
+                    referenceType: 'ADJUSTMENT',
+                    date: new Date(),
+                    isActive: true
+                }
+            });
+            return updatedAdvance;
+        });
         await (0, auditLogger_1.createAuditLog)({
             userId: currentUser?.id || 'unknown',
             action: 'UPDATE',
@@ -417,7 +503,7 @@ const paySalaryAdvance = async (req, res) => {
         });
         res.json({
             success: true,
-            data: updatedAdvance
+            data: result
         });
     }
     catch (error) {

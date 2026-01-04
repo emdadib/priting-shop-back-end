@@ -60,11 +60,14 @@ export const createCustomer = async (req: Request, res: Response): Promise<Respo
   try {
     const { firstName, lastName, email, phone, address } = req.body;
 
+    // Convert empty email string to null
+    const emailValue = email && email.trim() !== '' ? email.trim() : null;
+
     const customer = await prisma.customer.create({
       data: {
         firstName,
         lastName,
-        email,
+        email: emailValue,
         phone,
         address
       }
@@ -76,7 +79,7 @@ export const createCustomer = async (req: Request, res: Response): Promise<Respo
       action: 'CREATE',
       entity: 'CUSTOMER',
       entityId: customer.id,
-      newValues: { firstName, lastName, email, phone, address },
+      newValues: { firstName, lastName, email: emailValue, phone, address },
       ipAddress: req.ip,
       userAgent: req.get('User-Agent')
     });
@@ -111,12 +114,15 @@ export const updateCustomer = async (req: Request, res: Response): Promise<Respo
       });
     }
 
+    // Convert empty email string to null
+    const emailValue = email && email.trim() !== '' ? email.trim() : null;
+
     const updatedCustomer = await prisma.customer.update({
       where: { id },
       data: {
         firstName,
         lastName,
-        email,
+        email: emailValue,
         phone,
         address
       }
@@ -135,7 +141,7 @@ export const updateCustomer = async (req: Request, res: Response): Promise<Respo
         phone: existingCustomer.phone,
         address: existingCustomer.address
       },
-      newValues: { firstName, lastName, email, phone, address },
+      newValues: { firstName, lastName, email: emailValue, phone, address },
       ipAddress: req.ip,
       userAgent: req.get('User-Agent')
     });

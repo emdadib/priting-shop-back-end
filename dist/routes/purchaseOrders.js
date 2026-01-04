@@ -10,6 +10,7 @@ const router = express_1.default.Router();
 router.use(auth_1.authenticateToken);
 router.get('/', purchaseOrderController_1.getAllPurchaseOrders);
 router.get('/stats', purchaseOrderController_1.getPurchaseOrderStats);
+router.get('/with-due-amount', purchaseOrderController_1.getPurchaseOrdersWithDueAmount);
 router.get('/supplier/:supplierId', purchaseOrderController_1.getPurchaseOrdersBySupplier);
 router.get('/:id', purchaseOrderController_1.getPurchaseOrderById);
 router.post('/', purchaseOrderController_1.createPurchaseOrder);

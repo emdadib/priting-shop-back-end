@@ -6,23 +6,50 @@ const auditLogger_1 = require("../utils/auditLogger");
 const prisma = new client_1.PrismaClient();
 const getAllOrders = async (req, res) => {
     try {
-        const orders = await prisma.order.findMany({
-            include: {
-                customer: true,
-                user: true,
-                items: {
-                    include: {
-                        product: true
-                    }
-                }
-            },
-            orderBy: {
-                createdAt: 'desc'
+        const { page = 1, limit = 10, status, startDate, endDate } = req.query;
+        const skip = (Number(page) - 1) * Number(limit);
+        const where = {};
+        if (status) {
+            where.status = status;
+        }
+        if (startDate || endDate) {
+            where.createdAt = {};
+            if (startDate) {
+                where.createdAt.gte = new Date(startDate);
             }
-        });
+            if (endDate) {
+                where.createdAt.lte = new Date(endDate);
+            }
+        }
+        const [orders, total] = await Promise.all([
+            prisma.order.findMany({
+                where,
+                include: {
+                    customer: true,
+                    user: true,
+                    items: {
+                        include: {
+                            product: true
+                        }
+                    }
+                },
+                orderBy: {
+                    createdAt: 'desc'
+                },
+                skip,
+                take: Number(limit)
+            }),
+            prisma.order.count({ where })
+        ]);
         res.json({
             success: true,
-            data: orders
+            data: orders,
+            pagination: {
+                page: Number(page),
+                limit: Number(limit),
+                total,
+                pages: Math.ceil(total / Number(limit))
+            }
         });
     }
     catch (error) {
@@ -379,6 +406,31 @@ const deleteOrder = async (req, res) => {
                 isActive: false
             }
         });
+        const relatedPayments = await prisma.payment.findMany({
+            where: { orderId: id },
+            select: { id: true }
+        });
+        const paymentIds = relatedPayments.map(p => p.id);
+        if (paymentIds.length > 0) {
+            await prisma.companyTransaction.updateMany({
+                where: {
+                    referenceType: 'PAYMENT',
+                    referenceId: { in: paymentIds }
+                },
+                data: {
+                    isActive: false
+                }
+            });
+            await prisma.customerTransaction.updateMany({
+                where: {
+                    referenceType: 'PAYMENT',
+                    referenceId: { in: paymentIds }
+                },
+                data: {
+                    isActive: false
+                }
+            });
+        }
         await prisma.payment.deleteMany({
             where: { orderId: id }
         });

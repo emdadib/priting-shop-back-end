@@ -725,3 +725,80 @@ export const getPurchaseOrdersBySupplier = async (req: Request, res: Response) =
     return res.status(500).json({ error: 'Failed to fetch supplier purchase orders' });
   }
 };
+
+// Get purchase orders with due amounts
+export const getPurchaseOrdersWithDueAmount = async (req: Request, res: Response) => {
+  try {
+    const purchaseOrders = await prisma.purchaseOrder.findMany({
+      where: {
+        dueAmount: {
+          gt: 0
+        }
+      },
+      include: {
+        supplier: {
+          select: {
+            id: true,
+            name: true,
+            company: true,
+            email: true,
+            phone: true
+          }
+        },
+        items: {
+          include: {
+            product: {
+              select: {
+                id: true,
+                name: true,
+                sku: true
+              }
+            }
+          }
+        },
+        user: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true
+          }
+        }
+      },
+      orderBy: {
+        orderDate: 'desc'
+      }
+    });
+
+    // Calculate summary statistics
+    const totalDueAmount = purchaseOrders.reduce((sum, po) => {
+      return sum + Number(po.dueAmount?.toString() || '0');
+    }, 0);
+
+    const totalOrders = purchaseOrders.length;
+
+    // Group by payment status
+    const byPaymentStatus = purchaseOrders.reduce((acc, po) => {
+      const status = po.paymentStatus || 'PENDING';
+      if (!acc[status]) {
+        acc[status] = { count: 0, totalDue: 0 };
+      }
+      acc[status].count++;
+      acc[status].totalDue += Number(po.dueAmount?.toString() || '0');
+      return acc;
+    }, {} as Record<string, { count: number; totalDue: number }>);
+
+    return res.json({
+      hasDueAmount: totalOrders > 0,
+      totalOrders,
+      totalDueAmount,
+      purchaseOrders,
+      summary: {
+        byPaymentStatus
+      }
+    });
+  } catch (error) {
+    console.error('Error fetching purchase orders with due amount:', error);
+    return res.status(500).json({ error: 'Failed to fetch purchase orders with due amount' });
+  }
+};

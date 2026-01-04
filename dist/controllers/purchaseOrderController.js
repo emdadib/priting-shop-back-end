@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.getPurchaseOrdersBySupplier = exports.getPurchaseOrderStats = exports.deletePurchaseOrder = exports.updatePurchaseOrderStatus = exports.updatePurchaseOrder = exports.createPurchaseOrder = exports.getPurchaseOrderById = exports.getAllPurchaseOrders = void 0;
+exports.getPurchaseOrdersWithDueAmount = exports.getPurchaseOrdersBySupplier = exports.getPurchaseOrderStats = exports.deletePurchaseOrder = exports.updatePurchaseOrderStatus = exports.updatePurchaseOrder = exports.createPurchaseOrder = exports.getPurchaseOrderById = exports.getAllPurchaseOrders = void 0;
 const client_1 = require("@prisma/client");
 const prisma = new client_1.PrismaClient();
 const getAllPurchaseOrders = async (req, res) => {
@@ -207,19 +207,33 @@ const createPurchaseOrder = async (req, res) => {
                 isActive: true
             }
         });
-        await prisma.companyTransaction.create({
-            data: {
+        const existingPurchaseCostTransaction = await prisma.companyTransaction.findFirst({
+            where: {
+                referenceId: purchaseOrder.id,
+                referenceType: 'PURCHASE_ORDER',
                 accountType: 'PURCHASES',
                 type: 'DEBIT',
-                amount: parseFloat(total || 0),
-                description: `Purchase Cost - Order ${poNumber}`,
-                reference: poNumber,
-                referenceType: 'PURCHASE_ORDER',
-                referenceId: purchaseOrder.id,
-                date: new Date(),
                 isActive: true
             }
         });
+        if (!existingPurchaseCostTransaction) {
+            await prisma.companyTransaction.create({
+                data: {
+                    accountType: 'PURCHASES',
+                    type: 'DEBIT',
+                    amount: parseFloat(total || 0),
+                    description: `Purchase Cost - Order ${poNumber}`,
+                    reference: poNumber,
+                    referenceType: 'PURCHASE_ORDER',
+                    referenceId: purchaseOrder.id,
+                    date: new Date(),
+                    isActive: true
+                }
+            });
+        }
+        else {
+            console.log(`Purchase cost transaction already exists for PO ${poNumber}, skipping duplicate creation`);
+        }
         return res.status(201).json(purchaseOrder);
     }
     catch (error) {
@@ -405,13 +419,16 @@ const updatePurchaseOrderStatus = async (req, res) => {
                         isActive: true
                     }
                 });
-                const existingCompanyTransaction = await prisma.companyTransaction.findFirst({
+                const existingPurchaseCostTransaction = await prisma.companyTransaction.findFirst({
                     where: {
                         referenceId: existingOrder.id,
-                        referenceType: 'PURCHASE_ORDER'
+                        referenceType: 'PURCHASE_ORDER',
+                        accountType: 'PURCHASES',
+                        type: 'DEBIT',
+                        isActive: true
                     }
                 });
-                if (!existingCompanyTransaction) {
+                if (!existingPurchaseCostTransaction) {
                     await prisma.companyTransaction.create({
                         data: {
                             accountType: 'PURCHASES',
@@ -425,6 +442,9 @@ const updatePurchaseOrderStatus = async (req, res) => {
                             isActive: true
                         }
                     });
+                }
+                else {
+                    console.log(`Purchase cost transaction already exists for PO ${existingOrder.poNumber}, skipping duplicate creation`);
                 }
                 console.log('Supplier transaction created for received purchase order:', existingOrder.poNumber);
             }
@@ -447,17 +467,96 @@ exports.updatePurchaseOrderStatus = updatePurchaseOrderStatus;
 const deletePurchaseOrder = async (req, res) => {
     try {
         const { id } = req.params;
+        const existingOrder = await prisma.purchaseOrder.findUnique({
+            where: { id },
+            include: {
+                supplier: true
+            }
+        });
+        if (!existingOrder) {
+            return res.status(404).json({
+                success: false,
+                message: 'Purchase order not found'
+            });
+        }
+        const relatedPayments = await prisma.payment.findMany({
+            where: {
+                supplierId: existingOrder.supplierId,
+                notes: {
+                    contains: existingOrder.poNumber
+                }
+            },
+            select: { id: true }
+        });
+        const paymentIds = relatedPayments.map(p => p.id);
+        if (paymentIds.length > 0) {
+            await prisma.companyTransaction.updateMany({
+                where: {
+                    referenceType: 'PAYMENT',
+                    referenceId: { in: paymentIds }
+                },
+                data: {
+                    isActive: false
+                }
+            });
+            await prisma.supplierTransaction.updateMany({
+                where: {
+                    referenceType: 'PAYMENT',
+                    referenceId: { in: paymentIds }
+                },
+                data: {
+                    isActive: false
+                }
+            });
+        }
+        await prisma.supplierTransaction.updateMany({
+            where: {
+                referenceType: 'PURCHASE_ORDER',
+                referenceId: id
+            },
+            data: {
+                isActive: false
+            }
+        });
+        await prisma.companyTransaction.updateMany({
+            where: {
+                referenceType: 'PURCHASE_ORDER',
+                referenceId: id
+            },
+            data: {
+                isActive: false
+            }
+        });
         await prisma.purchaseOrderItem.deleteMany({
             where: { purchaseOrderId: id }
         });
+        if (paymentIds.length > 0) {
+            await prisma.payment.deleteMany({
+                where: {
+                    id: { in: paymentIds }
+                }
+            });
+        }
         await prisma.purchaseOrder.delete({
             where: { id }
         });
-        return res.json({ message: 'Purchase order deleted successfully' });
+        console.log('Purchase order and related transactions deleted successfully:', {
+            purchaseOrderId: id,
+            poNumber: existingOrder.poNumber,
+            transactionsSoftDeleted: true,
+            paymentsDeleted: paymentIds.length
+        });
+        return res.json({
+            success: true,
+            message: 'Purchase order deleted successfully'
+        });
     }
     catch (error) {
         console.error('Error deleting purchase order:', error);
-        return res.status(500).json({ error: 'Failed to delete purchase order' });
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to delete purchase order'
+        });
     }
 };
 exports.deletePurchaseOrder = deletePurchaseOrder;
@@ -512,4 +611,75 @@ const getPurchaseOrdersBySupplier = async (req, res) => {
     }
 };
 exports.getPurchaseOrdersBySupplier = getPurchaseOrdersBySupplier;
+const getPurchaseOrdersWithDueAmount = async (req, res) => {
+    try {
+        const purchaseOrders = await prisma.purchaseOrder.findMany({
+            where: {
+                dueAmount: {
+                    gt: 0
+                }
+            },
+            include: {
+                supplier: {
+                    select: {
+                        id: true,
+                        name: true,
+                        company: true,
+                        email: true,
+                        phone: true
+                    }
+                },
+                items: {
+                    include: {
+                        product: {
+                            select: {
+                                id: true,
+                                name: true,
+                                sku: true
+                            }
+                        }
+                    }
+                },
+                user: {
+                    select: {
+                        id: true,
+                        firstName: true,
+                        lastName: true,
+                        email: true
+                    }
+                }
+            },
+            orderBy: {
+                orderDate: 'desc'
+            }
+        });
+        const totalDueAmount = purchaseOrders.reduce((sum, po) => {
+            return sum + Number(po.dueAmount?.toString() || '0');
+        }, 0);
+        const totalOrders = purchaseOrders.length;
+        const byPaymentStatus = purchaseOrders.reduce((acc, po) => {
+            const status = po.paymentStatus || 'PENDING';
+            if (!acc[status]) {
+                acc[status] = { count: 0, totalDue: 0 };
+            }
+            acc[status].count++;
+            acc[status].totalDue += Number(po.dueAmount?.toString() || '0');
+            return acc;
+        }, {});
+        return res.json({
+            hasDueAmount: totalOrders > 0,
+            totalOrders,
+            totalDueAmount,
+            purchaseOrders,
+            summary: {
+                byPaymentStatus
+            }
+        });
+    }
+    catch (error) {
+        console.error('Error fetching purchase orders with due amount:', error);
+        return res.status(500).json({ error: 'Failed to fetch purchase orders with due amount' });
+    }
+};
+exports.getPurchaseOrdersWithDueAmount = getPurchaseOrdersWithDueAmount;
 //# sourceMappingURL=purchaseOrderController.js.map

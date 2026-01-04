@@ -1,6 +1,6 @@
 "use strict";
 Object.defineProperty(exports, "__esModule", { value: true });
-exports.cleanupOrphanedTransactions = exports.findOrphanedTransactions = exports.getProfitSummary = exports.calculateAndRecordProfit = exports.withdrawProfit = exports.depositProfit = exports.deleteExpenseCategory = exports.updateExpenseCategory = exports.addExpenseCategory = exports.getExpenseCategories = exports.getExpenseSummary = exports.deleteExpense = exports.updateExpense = exports.addExpense = exports.getExpenses = exports.getAgingReport = exports.getAccountingSummary = exports.addCompanyTransaction = exports.addSupplierTransaction = exports.addCustomerTransaction = exports.getCompanyLedger = exports.getSupplierLedger = exports.getCustomerLedger = void 0;
+exports.deletePurchaseOrderLedgerEntries = exports.cleanupOrphanedTransactions = exports.findOrphanedTransactions = exports.getProfitSummary = exports.calculateAndRecordProfit = exports.withdrawProfit = exports.ownerWithdrawal = exports.depositProfit = exports.deleteExpenseCategory = exports.updateExpenseCategory = exports.addExpenseCategory = exports.getExpenseCategories = exports.getExpenseSummary = exports.deleteExpense = exports.updateExpense = exports.addExpense = exports.getExpenses = exports.getAgingReport = exports.getAccountingSummary = exports.addCompanyTransaction = exports.addSupplierTransaction = exports.addCustomerTransaction = exports.getCompanyLedger = exports.getSupplierLedger = exports.getCustomerLedger = void 0;
 const client_1 = require("@prisma/client");
 const prisma = new client_1.PrismaClient();
 const getCustomerLedger = async (req, res) => {
@@ -148,7 +148,7 @@ const getSupplierLedger = async (req, res) => {
 exports.getSupplierLedger = getSupplierLedger;
 const getCompanyLedger = async (req, res) => {
     try {
-        const { startDate, endDate, page = 1, limit = 50, accountType } = req.query;
+        const { startDate, endDate, page = 1, limit = 50, accountType, transactionType } = req.query;
         const skip = (Number(page) - 1) * Number(limit);
         const where = {
             isActive: true
@@ -156,8 +156,11 @@ const getCompanyLedger = async (req, res) => {
         if (accountType) {
             where.accountType = accountType;
         }
+        if (transactionType) {
+            where.type = transactionType;
+        }
         if (startDate && endDate) {
-            where.createdAt = {
+            where.date = {
                 gte: new Date(startDate),
                 lte: new Date(endDate)
             };
@@ -165,7 +168,7 @@ const getCompanyLedger = async (req, res) => {
         const transactions = await prisma.companyTransaction.findMany({
             where,
             orderBy: {
-                createdAt: 'desc'
+                date: 'desc'
             },
             skip,
             take: Number(limit)
@@ -422,20 +425,54 @@ const getAccountingSummary = async (req, res) => {
                 lte: new Date(endDate)
             };
         }
-        const customerBalances = await prisma.customerTransaction.groupBy({
-            by: ['customerId'],
+        const allCustomerTransactions = await prisma.customerTransaction.findMany({
             where,
-            _sum: {
+            select: {
+                customerId: true,
+                type: true,
                 amount: true
             }
         });
-        const supplierBalances = await prisma.supplierTransaction.groupBy({
-            by: ['supplierId'],
+        const customerBalancesMap = new Map();
+        allCustomerTransactions.forEach(transaction => {
+            const customerId = transaction.customerId;
+            const currentBalance = customerBalancesMap.get(customerId) || 0;
+            const amount = Number(transaction.amount);
+            if (transaction.type === 'DEBIT') {
+                customerBalancesMap.set(customerId, currentBalance + amount);
+            }
+            else if (transaction.type === 'CREDIT') {
+                customerBalancesMap.set(customerId, currentBalance - amount);
+            }
+        });
+        const customerBalances = Array.from(customerBalancesMap.entries()).map(([customerId, balance]) => ({
+            customerId,
+            balance
+        }));
+        const allSupplierTransactions = await prisma.supplierTransaction.findMany({
             where,
-            _sum: {
+            select: {
+                supplierId: true,
+                type: true,
                 amount: true
             }
         });
+        const supplierBalancesMap = new Map();
+        allSupplierTransactions.forEach(transaction => {
+            const supplierId = transaction.supplierId;
+            const currentBalance = supplierBalancesMap.get(supplierId) || 0;
+            const amount = Number(transaction.amount);
+            if (transaction.type === 'CREDIT') {
+                supplierBalancesMap.set(supplierId, currentBalance + amount);
+            }
+            else if (transaction.type === 'DEBIT') {
+                supplierBalancesMap.set(supplierId, currentBalance - amount);
+            }
+        });
+        const supplierBalances = Array.from(supplierBalancesMap.entries()).map(([supplierId, balance]) => ({
+            supplierId,
+            balance
+        }));
         const companyBalances = await prisma.companyTransaction.groupBy({
             by: ['accountType'],
             where,
@@ -444,7 +481,7 @@ const getAccountingSummary = async (req, res) => {
             }
         });
         const totalReceivables = customerBalances.reduce((sum, balance) => {
-            return sum + Number(balance._sum.amount || 0);
+            return sum + (balance.balance > 0 ? balance.balance : 0);
         }, 0);
         const purchaseOrders = await prisma.purchaseOrder.findMany({
             where: {
@@ -572,29 +609,50 @@ const getExpenses = async (req, res) => {
 exports.getExpenses = getExpenses;
 const addExpense = async (req, res) => {
     try {
-        const { accountType, type, amount, description, reference, expenseCategoryId, date } = req.body;
-        const transaction = await prisma.companyTransaction.create({
-            data: {
-                accountType: accountType || 'EXPENSES',
-                type,
-                amount: parseFloat(amount),
-                description,
-                reference,
-                expenseCategoryId: expenseCategoryId || null,
-                date: date ? new Date(date) : new Date(),
-                isActive: true
-            },
-            include: {
-                expenseCategory: {
-                    select: {
-                        id: true,
-                        name: true,
-                        description: true
+        const { accountType, type, amount, description, reference, expenseCategoryId, date, paymentMethod = 'CASH' } = req.body;
+        const expenseAmount = parseFloat(amount);
+        const transactionDate = date ? new Date(date) : new Date();
+        const expenseReference = reference || `EXPENSE-${Date.now()}`;
+        const expenseDescription = description || 'Expense';
+        const result = await prisma.$transaction(async (tx) => {
+            const expenseTransaction = await tx.companyTransaction.create({
+                data: {
+                    accountType: 'EXPENSES',
+                    type: 'DEBIT',
+                    amount: expenseAmount,
+                    description: expenseDescription,
+                    reference: expenseReference,
+                    expenseCategoryId: expenseCategoryId || null,
+                    date: transactionDate,
+                    isActive: true
+                },
+                include: {
+                    expenseCategory: {
+                        select: {
+                            id: true,
+                            name: true,
+                            description: true
+                        }
                     }
                 }
-            }
+            });
+            const cashAccountType = (paymentMethod === 'BANK' ? 'BANK' : 'CASH');
+            await tx.companyTransaction.create({
+                data: {
+                    accountType: cashAccountType,
+                    type: 'CREDIT',
+                    amount: expenseAmount,
+                    description: `${expenseDescription} - Payment`,
+                    reference: expenseReference,
+                    referenceType: 'ADJUSTMENT',
+                    referenceId: expenseTransaction.id,
+                    date: transactionDate,
+                    isActive: true
+                }
+            });
+            return expenseTransaction;
         });
-        return res.status(201).json(transaction);
+        return res.status(201).json(result);
     }
     catch (error) {
         console.error('Error adding expense:', error);
@@ -605,29 +663,69 @@ exports.addExpense = addExpense;
 const updateExpense = async (req, res) => {
     try {
         const { id } = req.params;
-        const { accountType, type, amount, description, reference, expenseCategoryId, date } = req.body;
-        const transaction = await prisma.companyTransaction.update({
-            where: { id },
-            data: {
-                accountType: accountType || 'EXPENSES',
-                type,
-                amount: parseFloat(amount),
-                description,
-                reference,
-                expenseCategoryId: expenseCategoryId || null,
-                date: date ? new Date(date) : new Date()
-            },
-            include: {
-                expenseCategory: {
-                    select: {
-                        id: true,
-                        name: true,
-                        description: true
+        const { accountType, type, amount, description, reference, expenseCategoryId, date, paymentMethod = 'CASH' } = req.body;
+        const expenseAmount = parseFloat(amount);
+        const transactionDate = date ? new Date(date) : new Date();
+        const expenseDescription = description || 'Expense';
+        const result = await prisma.$transaction(async (tx) => {
+            const expenseTransaction = await tx.companyTransaction.update({
+                where: { id },
+                data: {
+                    accountType: 'EXPENSES',
+                    type: 'DEBIT',
+                    amount: expenseAmount,
+                    description: expenseDescription,
+                    reference,
+                    expenseCategoryId: expenseCategoryId || null,
+                    date: transactionDate
+                },
+                include: {
+                    expenseCategory: {
+                        select: {
+                            id: true,
+                            name: true,
+                            description: true
+                        }
                     }
                 }
+            });
+            const cashAccountType = (paymentMethod === 'BANK' ? 'BANK' : 'CASH');
+            const relatedCashTransaction = await tx.companyTransaction.findFirst({
+                where: {
+                    referenceId: id,
+                    referenceType: 'ADJUSTMENT',
+                    accountType: { in: ['CASH', 'BANK'] }
+                }
+            });
+            if (relatedCashTransaction) {
+                await tx.companyTransaction.update({
+                    where: { id: relatedCashTransaction.id },
+                    data: {
+                        accountType: cashAccountType,
+                        amount: expenseAmount,
+                        description: `${expenseDescription} - Payment`,
+                        date: transactionDate
+                    }
+                });
             }
+            else {
+                await tx.companyTransaction.create({
+                    data: {
+                        accountType: cashAccountType,
+                        type: 'CREDIT',
+                        amount: expenseAmount,
+                        description: `${expenseDescription} - Payment`,
+                        reference: reference || expenseTransaction.reference,
+                        referenceType: 'ADJUSTMENT',
+                        referenceId: id,
+                        date: transactionDate,
+                        isActive: true
+                    }
+                });
+            }
+            return expenseTransaction;
         });
-        return res.json(transaction);
+        return res.json(result);
     }
     catch (error) {
         console.error('Error updating expense:', error);
@@ -638,9 +736,24 @@ exports.updateExpense = updateExpense;
 const deleteExpense = async (req, res) => {
     try {
         const { id } = req.params;
-        await prisma.companyTransaction.update({
-            where: { id },
-            data: { isActive: false }
+        await prisma.$transaction(async (tx) => {
+            await tx.companyTransaction.update({
+                where: { id },
+                data: { isActive: false }
+            });
+            const relatedCashTransaction = await tx.companyTransaction.findFirst({
+                where: {
+                    referenceId: id,
+                    referenceType: 'ADJUSTMENT',
+                    accountType: { in: ['CASH', 'BANK'] }
+                }
+            });
+            if (relatedCashTransaction) {
+                await tx.companyTransaction.update({
+                    where: { id: relatedCashTransaction.id },
+                    data: { isActive: false }
+                });
+            }
         });
         return res.json({ message: 'Expense deleted successfully' });
     }
@@ -896,6 +1009,47 @@ const depositProfit = async (req, res) => {
     }
 };
 exports.depositProfit = depositProfit;
+const ownerWithdrawal = async (req, res) => {
+    try {
+        const { amount, accountType = 'CASH', description, reference, date } = req.body;
+        if (!amount || amount <= 0) {
+            return res.status(400).json({ error: 'Amount must be greater than 0' });
+        }
+        if (accountType !== 'CASH' && accountType !== 'BANK') {
+            return res.status(400).json({ error: 'Account type must be CASH or BANK' });
+        }
+        const transactionDate = date ? new Date(date) : new Date();
+        const withdrawalDescription = description || `Owner Withdrawal`;
+        const transactionReference = reference || `OWNER-WITHDRAW-${Date.now()}`;
+        const result = await prisma.$transaction(async (tx) => {
+            const cashTransaction = await tx.companyTransaction.create({
+                data: {
+                    accountType: accountType,
+                    type: 'CREDIT',
+                    amount: parseFloat(amount),
+                    description: withdrawalDescription,
+                    reference: transactionReference,
+                    referenceType: 'ADJUSTMENT',
+                    date: transactionDate,
+                    isActive: true
+                }
+            });
+            return {
+                cashTransaction
+            };
+        });
+        return res.status(201).json({
+            success: true,
+            message: 'Owner withdrawal recorded successfully',
+            data: result
+        });
+    }
+    catch (error) {
+        console.error('Error recording owner withdrawal:', error);
+        return res.status(500).json({ error: 'Failed to record owner withdrawal' });
+    }
+};
+exports.ownerWithdrawal = ownerWithdrawal;
 const withdrawProfit = async (req, res) => {
     try {
         const { amount, accountType, description, reference, date, profitType = 'PROFIT' } = req.body;
@@ -990,35 +1144,46 @@ const calculateAndRecordProfit = async (req, res) => {
                     gte: periodStart,
                     lte: periodEnd
                 }
+            },
+            select: {
+                id: true,
+                amount: true,
+                date: true,
+                referenceId: true,
+                reference: true,
+                referenceType: true
             }
         });
         const totalRevenue = salesTransactions.reduce((sum, t) => sum + Number(t.amount), 0);
-        const completedOrders = await prisma.order.findMany({
-            where: {
-                status: 'COMPLETED',
-                createdAt: {
-                    gte: periodStart,
-                    lte: periodEnd
-                }
-            },
-            include: {
-                items: {
-                    include: {
-                        product: {
-                            select: {
-                                baseCostPrice: true
-                            }
+        const orderIdsFromSales = salesTransactions
+            .filter(t => t.referenceType === 'ORDER' && t.referenceId)
+            .map(t => t.referenceId)
+            .filter((id) => id !== null);
+        const ordersWithRevenue = orderIdsFromSales.length > 0
+            ? await prisma.order.findMany({
+                where: {
+                    id: { in: orderIdsFromSales },
+                    status: 'COMPLETED'
+                },
+                include: {
+                    items: {
+                        select: {
+                            id: true,
+                            quantity: true,
+                            costPrice: true
                         }
                     }
                 }
-            }
-        });
+            })
+            : [];
         let totalCOGS = 0;
-        completedOrders.forEach(order => {
-            order.items.forEach(item => {
-                const itemCost = Number(item.product.baseCostPrice) * Number(item.quantity);
-                totalCOGS += itemCost;
-            });
+        ordersWithRevenue.forEach(order => {
+            if (order.items) {
+                order.items.forEach((item) => {
+                    const itemCost = Number(item.costPrice) * Number(item.quantity);
+                    totalCOGS += itemCost;
+                });
+            }
         });
         const expenseTransactions = await prisma.companyTransaction.findMany({
             where: {
@@ -1188,30 +1353,46 @@ const getProfitSummary = async (req, res) => {
                 date: 'desc'
             }
         });
-        const deposits = equityTransactions
+        const profitLossTransactions = equityTransactions.filter(t => (t.description?.toLowerCase().includes('net profit') ?? false) ||
+            (t.description?.toLowerCase().includes('net loss') ?? false) ||
+            t.reference?.startsWith('PROFIT-CALC-'));
+        const operationalProfit = profitLossTransactions
             .filter(t => t.type === 'CREDIT')
             .reduce((sum, t) => sum + Number(t.amount), 0);
-        const withdrawals = equityTransactions
+        const operationalLoss = profitLossTransactions
             .filter(t => t.type === 'DEBIT')
             .reduce((sum, t) => sum + Number(t.amount), 0);
-        const netProfit = deposits - withdrawals;
-        const investorDeposits = equityTransactions
-            .filter(t => t.type === 'CREDIT' && t.description.toLowerCase().includes('investor'))
+        const netOperationalProfit = operationalProfit - operationalLoss;
+        const manualTransactions = equityTransactions.filter(t => !(t.description?.toLowerCase().includes('net profit') ?? false) &&
+            !(t.description?.toLowerCase().includes('net loss') ?? false) &&
+            !t.reference?.startsWith('PROFIT-CALC-'));
+        const deposits = manualTransactions
+            .filter(t => t.type === 'CREDIT')
             .reduce((sum, t) => sum + Number(t.amount), 0);
-        const investorWithdrawals = equityTransactions
-            .filter(t => t.type === 'DEBIT' && t.description.toLowerCase().includes('investor'))
+        const withdrawals = manualTransactions
+            .filter(t => t.type === 'DEBIT')
             .reduce((sum, t) => sum + Number(t.amount), 0);
-        const regularDeposits = equityTransactions
-            .filter(t => t.type === 'CREDIT' && !t.description.toLowerCase().includes('investor'))
+        const netProfit = netOperationalProfit + deposits - withdrawals;
+        const investorDeposits = manualTransactions
+            .filter(t => t.type === 'CREDIT' && (t.description?.toLowerCase().includes('investor') ?? false))
             .reduce((sum, t) => sum + Number(t.amount), 0);
-        const regularWithdrawals = equityTransactions
-            .filter(t => t.type === 'DEBIT' && !t.description.toLowerCase().includes('investor'))
+        const investorWithdrawals = manualTransactions
+            .filter(t => t.type === 'DEBIT' && (t.description?.toLowerCase().includes('investor') ?? false))
+            .reduce((sum, t) => sum + Number(t.amount), 0);
+        const regularDeposits = manualTransactions
+            .filter(t => t.type === 'CREDIT' && !(t.description?.toLowerCase().includes('investor') ?? false))
+            .reduce((sum, t) => sum + Number(t.amount), 0);
+        const regularWithdrawals = manualTransactions
+            .filter(t => t.type === 'DEBIT' && !(t.description?.toLowerCase().includes('investor') ?? false))
             .reduce((sum, t) => sum + Number(t.amount), 0);
         return res.json({
             total: {
                 deposits,
                 withdrawals,
-                netProfit
+                netProfit,
+                operationalProfit,
+                operationalLoss,
+                netOperationalProfit
             },
             regular: {
                 deposits: regularDeposits,
@@ -1222,6 +1403,11 @@ const getProfitSummary = async (req, res) => {
                 deposits: investorDeposits,
                 withdrawals: investorWithdrawals,
                 netProfit: investorDeposits - investorWithdrawals
+            },
+            operational: {
+                profit: operationalProfit,
+                loss: operationalLoss,
+                net: netOperationalProfit
             },
             transactions: equityTransactions.map(t => ({
                 id: t.id,
@@ -1355,12 +1541,58 @@ const cleanupOrphanedTransactions = async (req, res) => {
                 }
             });
         }
+        const existingPayments = await prisma.payment.findMany({
+            select: { id: true }
+        });
+        const existingPaymentIds = new Set(existingPayments.map(p => p.id));
+        const orphanedPaymentCompanyTransactions = await prisma.companyTransaction.findMany({
+            where: {
+                referenceType: 'PAYMENT',
+                isActive: true
+            },
+            select: { id: true, referenceId: true }
+        });
+        const orphanedPaymentCompanyIds = orphanedPaymentCompanyTransactions
+            .filter(t => t.referenceId && !existingPaymentIds.has(t.referenceId))
+            .map(t => t.id);
+        if (orphanedPaymentCompanyIds.length > 0) {
+            await prisma.companyTransaction.updateMany({
+                where: {
+                    id: { in: orphanedPaymentCompanyIds }
+                },
+                data: {
+                    isActive: false
+                }
+            });
+        }
+        const orphanedPaymentCustomerTransactions = await prisma.customerTransaction.findMany({
+            where: {
+                referenceType: 'PAYMENT',
+                isActive: true
+            },
+            select: { id: true, referenceId: true }
+        });
+        const orphanedPaymentCustomerIds = orphanedPaymentCustomerTransactions
+            .filter(t => t.referenceId && !existingPaymentIds.has(t.referenceId))
+            .map(t => t.id);
+        if (orphanedPaymentCustomerIds.length > 0) {
+            await prisma.customerTransaction.updateMany({
+                where: {
+                    id: { in: orphanedPaymentCustomerIds }
+                },
+                data: {
+                    isActive: false
+                }
+            });
+        }
         return res.json({
             success: true,
             message: 'Orphaned transactions cleaned up successfully',
             cleanedCompanyTransactions: orphanedCompanyIds.length,
             cleanedCustomerTransactions: orphanedCustomerIds.length,
-            totalCleaned: orphanedCompanyIds.length + orphanedCustomerIds.length
+            cleanedPaymentCompanyTransactions: orphanedPaymentCompanyIds.length,
+            cleanedPaymentCustomerTransactions: orphanedPaymentCustomerIds.length,
+            totalCleaned: orphanedCompanyIds.length + orphanedCustomerIds.length + orphanedPaymentCompanyIds.length + orphanedPaymentCustomerIds.length
         });
     }
     catch (error) {
@@ -1369,4 +1601,88 @@ const cleanupOrphanedTransactions = async (req, res) => {
     }
 };
 exports.cleanupOrphanedTransactions = cleanupOrphanedTransactions;
+const deletePurchaseOrderLedgerEntries = async (req, res) => {
+    try {
+        const purchaseOrderTransactions = await prisma.companyTransaction.findMany({
+            where: {
+                referenceType: 'PURCHASE_ORDER',
+                isActive: true
+            },
+            select: {
+                id: true,
+                accountType: true,
+                type: true,
+                amount: true,
+                description: true,
+                reference: true,
+                referenceId: true
+            }
+        });
+        const transactionIds = purchaseOrderTransactions.map(t => t.id);
+        if (transactionIds.length === 0) {
+            return res.json({
+                success: true,
+                message: 'No purchase order ledger entries found to delete',
+                deletedCount: 0
+            });
+        }
+        await prisma.companyTransaction.updateMany({
+            where: {
+                id: { in: transactionIds }
+            },
+            data: {
+                isActive: false
+            }
+        });
+        const supplierTransactions = await prisma.supplierTransaction.findMany({
+            where: {
+                referenceType: 'PURCHASE_ORDER',
+                isActive: true
+            },
+            select: {
+                id: true
+            }
+        });
+        const supplierTransactionIds = supplierTransactions.map(t => t.id);
+        if (supplierTransactionIds.length > 0) {
+            await prisma.supplierTransaction.updateMany({
+                where: {
+                    id: { in: supplierTransactionIds }
+                },
+                data: {
+                    isActive: false
+                }
+            });
+        }
+        console.log('Purchase order ledger entries deleted:', {
+            companyTransactions: transactionIds.length,
+            supplierTransactions: supplierTransactionIds.length,
+            total: transactionIds.length + supplierTransactionIds.length
+        });
+        return res.json({
+            success: true,
+            message: 'Purchase order ledger entries deleted successfully',
+            deletedCompanyTransactions: transactionIds.length,
+            deletedSupplierTransactions: supplierTransactionIds.length,
+            totalDeleted: transactionIds.length + supplierTransactionIds.length,
+            details: {
+                companyTransactions: purchaseOrderTransactions.map(t => ({
+                    accountType: t.accountType,
+                    type: t.type,
+                    amount: t.amount.toString(),
+                    description: t.description,
+                    reference: t.reference
+                }))
+            }
+        });
+    }
+    catch (error) {
+        console.error('Error deleting purchase order ledger entries:', error);
+        return res.status(500).json({
+            success: false,
+            error: 'Failed to delete purchase order ledger entries'
+        });
+    }
+};
+exports.deletePurchaseOrderLedgerEntries = deletePurchaseOrderLedgerEntries;
 //# sourceMappingURL=accountingController.js.map

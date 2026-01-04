@@ -33,7 +33,10 @@ router.get('/:id/orders', getCustomerOrders);
 router.post('/', [
   body('firstName').notEmpty().withMessage('First name is required'),
   body('lastName').notEmpty().withMessage('Last name is required'),
-  body('email').optional().isEmail().withMessage('Please provide a valid email'),
+  body('email')
+    .optional({ checkFalsy: true, nullable: true })
+    .isEmail()
+    .withMessage('Please provide a valid email'),
   body('phone').optional().isString().withMessage('Phone must be a string'),
   validateRequest
 ], createCustomer);
@@ -41,7 +44,10 @@ router.post('/', [
 router.put('/:id', [
   body('firstName').optional().notEmpty().withMessage('First name cannot be empty'),
   body('lastName').optional().notEmpty().withMessage('Last name cannot be empty'),
-  body('email').optional().isEmail().withMessage('Please provide a valid email'),
+  body('email')
+    .optional({ checkFalsy: true, nullable: true })
+    .isEmail()
+    .withMessage('Please provide a valid email'),
   validateRequest
 ], updateCustomer);
 

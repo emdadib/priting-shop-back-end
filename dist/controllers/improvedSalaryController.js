@@ -226,34 +226,66 @@ const markPaymentAsPaid = async (req, res) => {
                 message: 'Payment is already marked as paid'
             });
         }
-        const updatedPayment = await index_1.prisma.salaryPayment.update({
-            where: { id },
-            data: {
-                status: 'PAID',
-                paidBy: currentUser?.id,
-                paidAt: new Date(),
-                notes: notes || payment.notes
-            },
-            include: {
-                user: {
-                    select: {
-                        id: true,
-                        firstName: true,
-                        lastName: true,
-                        email: true,
-                        role: true
-                    }
+        const netSalaryAmount = Number(payment.amount) +
+            (Number(payment.bonuses) || 0) -
+            (Number(payment.deductions) || 0) -
+            (Number(payment.advances) || 0);
+        const result = await index_1.prisma.$transaction(async (tx) => {
+            const updatedPayment = await tx.salaryPayment.update({
+                where: { id },
+                data: {
+                    status: 'PAID',
+                    paidBy: currentUser?.id,
+                    paidAt: new Date(),
+                    notes: notes || payment.notes
                 },
-                profile: true,
-                paidByUser: {
-                    select: {
-                        id: true,
-                        firstName: true,
-                        lastName: true
+                include: {
+                    user: {
+                        select: {
+                            id: true,
+                            firstName: true,
+                            lastName: true,
+                            email: true,
+                            role: true
+                        }
+                    },
+                    profile: true,
+                    paidByUser: {
+                        select: {
+                            id: true,
+                            firstName: true,
+                            lastName: true
+                        }
                     }
                 }
-            }
+            });
+            await tx.companyTransaction.create({
+                data: {
+                    accountType: 'CASH',
+                    type: 'CREDIT',
+                    amount: netSalaryAmount,
+                    description: `Salary Payment - ${updatedPayment.user.firstName} ${updatedPayment.user.lastName} (${payment.month}/${payment.year})`,
+                    reference: `SALARY-${payment.id}`,
+                    referenceType: 'ADJUSTMENT',
+                    date: new Date(),
+                    isActive: true
+                }
+            });
+            await tx.companyTransaction.create({
+                data: {
+                    accountType: 'EXPENSES',
+                    type: 'DEBIT',
+                    amount: netSalaryAmount,
+                    description: `Employee Salary - ${updatedPayment.user.firstName} ${updatedPayment.user.lastName} (${payment.month}/${payment.year})`,
+                    reference: `SALARY-${payment.id}`,
+                    referenceType: 'ADJUSTMENT',
+                    date: new Date(),
+                    isActive: true
+                }
+            });
+            return updatedPayment;
         });
+        const updatedPayment = result;
         await (0, auditLogger_1.createAuditLog)({
             userId: currentUser?.id || 'unknown',
             action: 'UPDATE',

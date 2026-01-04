@@ -70,7 +70,7 @@ const recordSupplierPayment = async (req, res) => {
         await prisma.companyTransaction.create({
             data: {
                 accountType: paymentMethod === 'CASH' ? 'CASH' : 'BANK',
-                type: 'DEBIT',
+                type: 'CREDIT',
                 amount: paymentAmount,
                 description: `Payment to ${purchaseOrder.supplier.name} - PO ${purchaseOrder.poNumber}`,
                 reference: purchaseOrder.poNumber,
