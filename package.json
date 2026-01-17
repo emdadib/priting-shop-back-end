@@ -5,7 +5,7 @@
   "main": "dist/index.js",
   "scripts": {
     "dev": "nodemon src/index.ts",
-    "build": "prisma generate",
+    "build": "npx prisma generate && npx prisma migrate deploy",
     "start": "node dist/index.js",
     "postinstall": "prisma generate",
     "setup-db": "prisma generate && prisma db push",
@@ -38,7 +38,8 @@
     "nodemailer": "^7.0.10",
     "qrcode": "^1.5.3",
     "socket.io": "^4.7.4",
-    "uuid": "^9.0.1"
+    "uuid": "^9.0.1",
+    "prisma": "^5.22.0"
   },
   "devDependencies": {
     "@prisma/client": "^5.22.0",
