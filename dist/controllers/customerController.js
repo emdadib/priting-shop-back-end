@@ -54,11 +54,12 @@ exports.getCustomerById = getCustomerById;
 const createCustomer = async (req, res) => {
     try {
         const { firstName, lastName, email, phone, address } = req.body;
+        const emailValue = email && email.trim() !== '' ? email.trim() : null;
         const customer = await prisma.customer.create({
             data: {
                 firstName,
                 lastName,
-                email,
+                email: emailValue,
                 phone,
                 address
             }
@@ -68,7 +69,7 @@ const createCustomer = async (req, res) => {
             action: 'CREATE',
             entity: 'CUSTOMER',
             entityId: customer.id,
-            newValues: { firstName, lastName, email, phone, address },
+            newValues: { firstName, lastName, email: emailValue, phone, address },
             ipAddress: req.ip,
             userAgent: req.get('User-Agent')
         });
@@ -99,12 +100,13 @@ const updateCustomer = async (req, res) => {
                 message: 'Customer not found'
             });
         }
+        const emailValue = email && email.trim() !== '' ? email.trim() : null;
         const updatedCustomer = await prisma.customer.update({
             where: { id },
             data: {
                 firstName,
                 lastName,
-                email,
+                email: emailValue,
                 phone,
                 address
             }
@@ -121,7 +123,7 @@ const updateCustomer = async (req, res) => {
                 phone: existingCustomer.phone,
                 address: existingCustomer.address
             },
-            newValues: { firstName, lastName, email, phone, address },
+            newValues: { firstName, lastName, email: emailValue, phone, address },
             ipAddress: req.ip,
             userAgent: req.get('User-Agent')
         });

@@ -23,14 +23,12 @@ router.get('/:id/orders', customerController_1.getCustomerOrders);
 router.post('/', [
     (0, express_validator_1.body)('firstName').notEmpty().withMessage('First name is required'),
     (0, express_validator_1.body)('lastName').notEmpty().withMessage('Last name is required'),
-    (0, express_validator_1.body)('email').optional().isEmail().withMessage('Please provide a valid email'),
     (0, express_validator_1.body)('phone').optional().isString().withMessage('Phone must be a string'),
     validation_1.validateRequest
 ], customerController_1.createCustomer);
 router.put('/:id', [
     (0, express_validator_1.body)('firstName').optional().notEmpty().withMessage('First name cannot be empty'),
     (0, express_validator_1.body)('lastName').optional().notEmpty().withMessage('Last name cannot be empty'),
-    (0, express_validator_1.body)('email').optional().isEmail().withMessage('Please provide a valid email'),
     validation_1.validateRequest
 ], customerController_1.updateCustomer);
 router.delete('/:id', customerController_1.deleteCustomer);

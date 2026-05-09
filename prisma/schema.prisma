@@ -39,8 +39,11 @@ model User {
   advancesApproved SalaryAdvance[] @relation("AdvanceApprovedBy")
   advancesPaid     SalaryAdvance[] @relation("AdvancePaidBy")
   salaryProfile    EmployeeSalaryProfile?
-  salaryPayments   SalaryPayment[]
-  salaryPaymentsPaid SalaryPayment[] @relation("SalaryPaymentPaidBy")
+  salaryPayments              SalaryPayment[]
+  salaryPaymentsPaid          SalaryPayment[]              @relation("SalaryPaymentPaidBy")
+  attendanceSalaryDeductions AttendanceSalaryDeduction[]
+  employeeLeaves             EmployeeLeave[]
+  reviewedLeaves             EmployeeLeave[]           @relation("LeaveReviewedBy")
 
   @@map("users")
 }
@@ -379,18 +382,21 @@ model Payment {
 }
 
 model Attendance {
-  id         String    @id @default(cuid())
-  userId     String
-  date       DateTime  @db.Date
-  clockIn    DateTime?
-  clockOut   DateTime?
-  breakStart DateTime?
-  breakEnd   DateTime?
-  totalHours Decimal?  @db.Decimal(4, 2)
-  notes      String?
-  createdAt  DateTime  @default(now())
-  updatedAt  DateTime  @updatedAt
-  user       User      @relation(fields: [userId], references: [id])
+  id          String           @id @default(cuid())
+  userId      String
+  date        DateTime         @db.Date
+  checkIn     DateTime?        @map("clockIn")
+  checkOut    DateTime?        @map("clockOut")
+  lunchOut    DateTime?        @map("breakStart")
+  lunchIn     DateTime?        @map("breakEnd")
+  totalHours  Decimal?         @db.Decimal(4, 2)
+  status      AttendanceStatus @default(PRESENT)
+  isLate      Boolean          @default(false)
+  lateMinutes Int              @default(0)
+  notes       String?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  user        User             @relation(fields: [userId], references: [id])
 
   @@unique([userId, date])
   @@map("attendance")
@@ -460,6 +466,56 @@ model SalaryAdvance {
   paidByUser  User?       @relation("AdvancePaidBy", fields: [paidBy], references: [id])
 
   @@map("salary_advances")
+}
+
+enum AttendanceStatus {
+  PRESENT
+  LATE
+  ABSENT
+  HALF_DAY
+  WEEKEND
+  HOLIDAY
+  ON_LEAVE
+}
+
+enum LeaveRequestStatus {
+  PENDING
+  APPROVED
+  REJECTED
+  CANCELLED
+}
+
+model ShopClosure {
+  id        String   @id @default(cuid())
+  startDate DateTime @db.Date
+  endDate   DateTime @db.Date
+  reason    String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([startDate, endDate])
+  @@map("shop_closures")
+}
+
+model EmployeeLeave {
+  id          String             @id @default(cuid())
+  userId      String
+  startDate   DateTime           @db.Date
+  endDate     DateTime           @db.Date
+  leaveType   String             @default("ANNUAL")
+  reason      String?
+  status      LeaveRequestStatus @default(PENDING)
+  reviewedBy  String?
+  reviewedAt  DateTime?
+  reviewNote  String?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+  reviewer    User?              @relation("LeaveReviewedBy", fields: [reviewedBy], references: [id])
+
+  @@index([userId, status])
+  @@index([startDate, endDate])
+  @@map("employee_leaves")
 }
 
 enum SalaryStatus {
@@ -554,6 +610,43 @@ model AuditLog {
   user      User?    @relation(fields: [userId], references: [id])
 
   @@map("audit_logs")
+}
+
+model AttendanceConfig {
+  id                      String   @id @default(cuid())
+  checkInTime             String   @default("10:00")
+  checkInLateThreshold    String   @default("10:30")
+  lunchBreakStartEarliest String   @default("13:00")
+  lunchBreakEndLatest     String   @default("15:00")
+  checkOutTime            String   @default("20:30")
+  weekendDays             String   @default("[5]")
+  lateCountThreshold      Int      @default(3)
+  absentDaysThreshold     Int      @default(2)
+  lunchBreakMandatory     Boolean  @default(true)
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  @@map("attendance_config")
+}
+
+model AttendanceSalaryDeduction {
+  id                  String   @id @default(cuid())
+  userId              String
+  month               Int
+  year                Int
+  lateDays            Int      @default(0)
+  absentDays          Int      @default(0)
+  lateDeductionDays   Decimal  @default(0) @db.Decimal(4, 2)
+  absentDeductionDays Decimal  @default(0) @db.Decimal(4, 2)
+  totalDeductionDays  Decimal  @default(0) @db.Decimal(4, 2)
+  deductionAmount     Decimal  @default(0) @db.Decimal(10, 2)
+  notes               String?
+  createdAt           DateTime @default(now())
+  updatedAt           DateTime @updatedAt
+  user                User     @relation(fields: [userId], references: [id])
+
+  @@unique([userId, month, year])
+  @@map("attendance_salary_deductions")
 }
 
 model Setting {
