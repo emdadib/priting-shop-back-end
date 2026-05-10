@@ -10,7 +10,8 @@ import {
   getOrdersByStatus,
   getOrdersByCustomer,
   getOrdersByDateRange,
-  updateOrderStatus
+  updateOrderStatus,
+  getOrdersWithDue
 } from '../controllers/orderController';
 
 import {
@@ -42,6 +43,12 @@ router.get('/date-range', [
   query('endDate').isISO8601().withMessage('End date must be a valid date'),
   validateRequest
 ], getOrdersByDateRange);
+
+router.get('/with-due', [
+  query('page').optional().isInt({ min: 1 }).withMessage('Page must be a positive integer'),
+  query('limit').optional().isInt({ min: 1, max: 100 }).withMessage('Limit must be between 1 and 100'),
+  validateRequest
+], getOrdersWithDue);
 
 router.get('/:id', getOrderById);
 
