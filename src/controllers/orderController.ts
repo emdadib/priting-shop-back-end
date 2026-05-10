@@ -75,6 +75,83 @@ export const getAllOrders = async (req: Request, res: Response): Promise<Respons
   }
 };
 
+// Get orders with outstanding due amount (paginated, server-side)
+export const getOrdersWithDue = async (req: Request, res: Response): Promise<Response | void> => {
+  try {
+    const pageNum = Math.max(1, Number(req.query.page) || 1);
+    const limitNum = Math.min(100, Math.max(1, Number(req.query.limit) || 10));
+    const offset = (pageNum - 1) * limitNum;
+
+    const rows = await prisma.$queryRaw<Array<{ id: string; dueAmount: string }>>`
+      SELECT o.id,
+             (o.total - COALESCE(SUM(p.amount), 0))::text AS "dueAmount"
+      FROM orders o
+      LEFT JOIN payments p ON p."orderId" = o.id
+      GROUP BY o.id, o.total
+      HAVING (o.total - COALESCE(SUM(p.amount), 0)) > 0
+      ORDER BY (o.total - COALESCE(SUM(p.amount), 0)) DESC
+      LIMIT ${limitNum} OFFSET ${offset}
+    `;
+
+    const aggregate = await prisma.$queryRaw<Array<{ totalOrders: bigint; totalDue: string | null }>>`
+      SELECT COUNT(*)::bigint AS "totalOrders",
+             COALESCE(SUM(o.total - paid.total_paid), 0)::text AS "totalDue"
+      FROM orders o
+      LEFT JOIN (
+        SELECT "orderId", SUM(amount) AS total_paid
+        FROM payments
+        WHERE "orderId" IS NOT NULL
+        GROUP BY "orderId"
+      ) paid ON paid."orderId" = o.id
+      WHERE (o.total - COALESCE(paid.total_paid, 0)) > 0
+    `;
+
+    const ids = rows.map(r => r.id);
+    const orders = ids.length
+      ? await prisma.order.findMany({
+          where: { id: { in: ids } },
+          include: {
+            customer: { select: { id: true, firstName: true, lastName: true, email: true } },
+            user: { select: { id: true, firstName: true, lastName: true } }
+          }
+        })
+      : [];
+
+    const dueById = new Map(rows.map(r => [r.id, Number(r.dueAmount)]));
+    const data = ids
+      .map(id => {
+        const order = orders.find(o => o.id === id);
+        if (!order) return null;
+        return { ...order, dueAmount: dueById.get(id) ?? 0 };
+      })
+      .filter(Boolean);
+
+    const totalOrders = Number(aggregate[0]?.totalOrders ?? 0);
+    const totalDue = Number(aggregate[0]?.totalDue ?? 0);
+
+    res.json({
+      success: true,
+      data,
+      pagination: {
+        page: pageNum,
+        limit: limitNum,
+        total: totalOrders,
+        pages: Math.ceil(totalOrders / limitNum)
+      },
+      summary: {
+        totalOrders,
+        totalDue
+      }
+    });
+  } catch (error) {
+    console.error('Get orders with due error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to fetch orders with due amount'
+    });
+  }
+};
+
 // Get order by ID
 export const getOrderById = async (req: Request, res: Response): Promise<Response | void> => {
   try {

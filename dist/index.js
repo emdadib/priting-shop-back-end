@@ -155,6 +155,18 @@ server.listen(PORT, () => {
     console.log(`🚀 Server running on port ${PORT}`);
     console.log(`📊 Environment: ${process.env.NODE_ENV}`);
     console.log(`🔗 Health check: http://localhost:${PORT}/health`);
+}).on('error', (err) => {
+    if (err.code === 'EADDRINUSE') {
+        console.error(`❌ Error: Port ${PORT} is already in use.`);
+        console.error(`   Please stop the process using port ${PORT} or use a different port.`);
+        console.error(`   To find the process: netstat -ano | findstr :${PORT}`);
+        console.error(`   To stop it: Stop-Process -Id <PID> -Force`);
+        process.exit(1);
+    }
+    else {
+        console.error('❌ Server error:', err);
+        process.exit(1);
+    }
 });
 exports.default = app;
 //# sourceMappingURL=index.js.map

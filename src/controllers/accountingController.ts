@@ -3,6 +3,26 @@ import { PrismaClient } from '@prisma/client';
 
 const prisma = new PrismaClient();
 
+type LedgerTransaction = {
+  id: string;
+  date: Date;
+  createdAt: Date;
+  type: 'DEBIT' | 'CREDIT';
+  amount: any;
+};
+
+function computeSignedAmountForCustomer(type: 'DEBIT' | 'CREDIT', amount: number) {
+  // Customer ledger balance = what customer owes us.
+  // DEBIT increases what customer owes; CREDIT decreases.
+  return type === 'DEBIT' ? amount : -amount;
+}
+
+function computeSignedAmountForSupplier(type: 'DEBIT' | 'CREDIT', amount: number) {
+  // Supplier ledger balance = what we owe supplier (payable).
+  // CREDIT increases payable; DEBIT decreases payable.
+  return type === 'CREDIT' ? amount : -amount;
+}
+
 // Types for accounting
 interface TransactionData {
   type: 'DEBIT' | 'CREDIT';
@@ -47,7 +67,7 @@ export const getCustomerLedger = async (req: Request, res: Response) => {
         }
       },
       orderBy: {
-        createdAt: 'desc'
+        date: 'desc'
       },
       skip,
       take: Number(limit)
@@ -55,37 +75,37 @@ export const getCustomerLedger = async (req: Request, res: Response) => {
 
     const total = await prisma.customerTransaction.count({ where });
 
-    // Calculate balance properly based on transaction type
-    // For customer ledger: balance represents how much the customer owes
-    // DEBIT = customer owes money (order created) - adds to balance
-    // CREDIT = payment received (reduces what customer owes) - subtracts from balance
+    // Calculate total balance + running balances (business date ordered)
     const allTransactions = await prisma.customerTransaction.findMany({
       where: {
         customerId,
         isActive: true
       },
+      orderBy: [{ date: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
       select: {
+        id: true,
+        date: true,
+        createdAt: true,
         type: true,
         amount: true
       }
     });
 
     let balance = 0;
-    allTransactions.forEach(transaction => {
+    const runningBalanceById = new Map<string, number>();
+    allTransactions.forEach((transaction: LedgerTransaction) => {
       const amount = Number(transaction.amount);
-      const transactionType = transaction.type;
-
-      if (transactionType === 'DEBIT') {
-        // DEBIT increases what customer owes
-        balance += amount;
-      } else if (transactionType === 'CREDIT') {
-        // CREDIT decreases what customer owes (payment received)
-        balance -= amount;
-      }
+      balance += computeSignedAmountForCustomer(transaction.type, amount);
+      runningBalanceById.set(transaction.id, balance);
     });
 
+    const transactionsWithRunningBalance = transactions.map((t: any) => ({
+      ...t,
+      runningBalance: runningBalanceById.get(t.id) ?? null
+    }));
+
     return res.json({
-      transactions,
+      transactions: transactionsWithRunningBalance,
       balance: balance,
       pagination: {
         page: Number(page),
@@ -132,7 +152,7 @@ export const getSupplierLedger = async (req: Request, res: Response) => {
         }
       },
       orderBy: {
-        createdAt: 'desc'
+        date: 'desc'
       },
       skip,
       take: Number(limit)
@@ -140,37 +160,36 @@ export const getSupplierLedger = async (req: Request, res: Response) => {
 
     const total = await prisma.supplierTransaction.count({ where });
 
-    // Calculate balance properly based on transaction type
-    // For supplier ledger: balance represents how much the supplier owes
-    // CREDIT = supplier owes money (payable increases) - adds to balance
-    // DEBIT = payment made (payable decreases) - subtracts from balance
     const allTransactions = await prisma.supplierTransaction.findMany({
       where: {
         supplierId,
         isActive: true
       },
+      orderBy: [{ date: 'asc' }, { createdAt: 'asc' }, { id: 'asc' }],
       select: {
+        id: true,
+        date: true,
+        createdAt: true,
         type: true,
         amount: true
       }
     });
 
     let balance = 0;
-    allTransactions.forEach(transaction => {
+    const runningBalanceById = new Map<string, number>();
+    allTransactions.forEach((transaction: LedgerTransaction) => {
       const amount = Number(transaction.amount);
-      const transactionType = transaction.type;
-
-      if (transactionType === 'CREDIT') {
-        // CREDIT increases what supplier owes
-        balance += amount;
-      } else if (transactionType === 'DEBIT') {
-        // DEBIT decreases what supplier owes (payment made)
-        balance -= amount;
-      }
+      balance += computeSignedAmountForSupplier(transaction.type, amount);
+      runningBalanceById.set(transaction.id, balance);
     });
 
+    const transactionsWithRunningBalance = transactions.map((t: any) => ({
+      ...t,
+      runningBalance: runningBalanceById.get(t.id) ?? null
+    }));
+
     return res.json({
-      transactions,
+      transactions: transactionsWithRunningBalance,
       balance: balance,
       pagination: {
         page: Number(page),
@@ -605,6 +624,14 @@ export const getAccountingSummary = async (req: Request, res: Response) => {
       return sum + (balance.balance > 0 ? balance.balance : 0); // Only positive balances (what customers owe)
     }, 0);
 
+    // Customer credits (sum of negative balances) - what we owe customers / customer prepayments
+    const totalCustomerCredits = customerBalances.reduce((sum, balance) => {
+      return sum + (balance.balance < 0 ? Math.abs(balance.balance) : 0);
+    }, 0);
+
+    // Net receivables after credits
+    const netReceivables = totalReceivables - totalCustomerCredits;
+
     // Calculate actual payables from purchase orders (due amounts)
     const purchaseOrders = await prisma.purchaseOrder.findMany({
       where: {
@@ -623,13 +650,23 @@ export const getAccountingSummary = async (req: Request, res: Response) => {
       return sum + Number(po.dueAmount?.toString() || '0');
     }, 0);
 
+    // Supplier ledger payable balance (includes opening balances / adjustments)
+    // Payables = sum(CREDIT) - sum(DEBIT)
+    const totalPayablesFromSupplierLedger = allSupplierTransactions.reduce((sum, t) => {
+      const amount = Number(t.amount);
+      return sum + computeSignedAmountForSupplier(t.type as any, amount);
+    }, 0);
+
     return res.json({
       customerBalances,
       supplierBalances,
       companyBalances,
       totalReceivables,
+      totalCustomerCredits,
+      netReceivables,
       totalPayables,
-      netPosition: totalReceivables - totalPayables
+      totalPayablesFromSupplierLedger,
+      netPosition: netReceivables - totalPayablesFromSupplierLedger
     });
   } catch (error) {
     console.error('Error fetching accounting summary:', error);

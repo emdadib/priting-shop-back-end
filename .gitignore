@@ -1,6 +1,12 @@
-/scripts*
+# Environment files
 .env
-.env
-.env.production
-.env
+.env.local
 .env.development
+.env.development.local
+.env.production
+.env.production.local
+.env.test
+.env.test.local
+
+# One-off scripts
+/scripts*
