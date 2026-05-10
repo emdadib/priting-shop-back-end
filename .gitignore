@@ -8,5 +8,8 @@
 .env.test
 .env.test.local
 
+# Build output (compiled by `tsc` during `npm run build`)
+dist/
+
 # One-off scripts
 /scripts*
