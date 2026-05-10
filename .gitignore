@@ -1,6 +1,6 @@
-/scripts*
 .env
 .env
 .env.production
 .env
 .env.development
+/scripts*
