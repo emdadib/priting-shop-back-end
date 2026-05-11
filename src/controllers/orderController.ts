@@ -205,6 +205,38 @@ export const createOrder = async (req: Request, res: Response): Promise<Response
       discountType
     });
 
+    // Compute total up-front so we can enforce the walk-in threshold before
+    // touching the customer table.
+    const computedSubtotal = (items || []).reduce((sum: number, item: any) => {
+      const itemTotal = (item.unitPrice * item.quantity) - (item.discount || 0);
+      return sum + itemTotal;
+    }, 0);
+    let computedSubtotalAfterDiscount = computedSubtotal;
+    if (discountAmount && discountAmount > 0) {
+      computedSubtotalAfterDiscount = discountType === 'PERCENTAGE'
+        ? computedSubtotal * (1 - discountAmount / 100)
+        : computedSubtotal - discountAmount;
+    }
+    const computedTax = (items || []).reduce((sum: number, item: any) => sum + (item.taxAmount || 0), 0);
+    const computedTotal = computedSubtotalAfterDiscount + computedTax;
+
+    // Reject walk-in orders above the threshold; a named customer is required.
+    const WALK_IN_MAX_TOTAL = 1000;
+    let resolvedIsWalkIn = customerId === 'walk-in';
+    if (!resolvedIsWalkIn && customerId) {
+      const incomingCustomer = await prisma.customer.findUnique({
+        where: { id: customerId },
+        select: { isWalkIn: true }
+      });
+      resolvedIsWalkIn = incomingCustomer?.isWalkIn === true;
+    }
+    if (resolvedIsWalkIn && computedTotal > WALK_IN_MAX_TOTAL) {
+      return res.status(400).json({
+        success: false,
+        message: `Walk-in customers are not allowed for orders above ${WALK_IN_MAX_TOTAL}. Please select a registered customer.`
+      });
+    }
+
     // Handle walk-in customers
     let finalCustomerId = customerId;
     if (customerId === 'walk-in') {
