@@ -86,7 +86,9 @@ app.use(cors({
     process.env.CLIENT_URL || "http://localhost:3000",
     "https://sbprinters.xyz",
     "https://sbprinters.netlify.app",
-    "http://localhost:3000"
+    "http://localhost:3000",
+    "https://localhost",
+    "capacitor://localhost"
   ],
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'PATCH', 'OPTIONS'],
