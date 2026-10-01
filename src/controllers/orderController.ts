@@ -4,6 +4,12 @@ import { createAuditLog } from '../utils/auditLogger';
 
 const prisma = new PrismaClient();
 
+// Fields of the employee who created an order that are safe to send to the client.
+// Never include the relation with `user: true`: that serialises the password hash.
+const orderUserSelect = {
+  select: { id: true, firstName: true, lastName: true, username: true }
+};
+
 // Get all orders
 export const getAllOrders = async (req: Request, res: Response): Promise<Response | void> => {
   try {
@@ -40,7 +46,7 @@ export const getAllOrders = async (req: Request, res: Response): Promise<Respons
         where,
         include: {
           customer: true,
-          user: true,
+          user: orderUserSelect,
           items: {
             include: {
               product: true
@@ -161,7 +167,7 @@ export const getOrderById = async (req: Request, res: Response): Promise<Respons
       where: { id },
       include: {
         customer: true,
-        user: true,
+        user: orderUserSelect,
         items: {
           include: {
             product: true
@@ -357,7 +363,7 @@ export const createOrder = async (req: Request, res: Response): Promise<Response
       },
       include: {
         customer: true,
-        user: true,
+        user: orderUserSelect,
         items: {
           include: {
             product: true
@@ -507,7 +513,7 @@ export const updateOrder = async (req: Request, res: Response): Promise<Response
       },
       include: {
         customer: true,
-        user: true,
+        user: orderUserSelect,
         items: {
           include: {
             product: true
@@ -667,7 +673,7 @@ export const getOrdersByStatus = async (req: Request, res: Response): Promise<Re
       where: { status: status as any },
       include: {
         customer: true,
-        user: true,
+        user: orderUserSelect,
         items: {
           include: {
             product: true
@@ -701,7 +707,7 @@ export const getOrdersByCustomer = async (req: Request, res: Response): Promise<
       where: { customerId },
       include: {
         customer: true,
-        user: true,
+        user: orderUserSelect,
         items: {
           include: {
             product: true
@@ -740,7 +746,7 @@ export const getOrdersByDateRange = async (req: Request, res: Response): Promise
       },
       include: {
         customer: true,
-        user: true,
+        user: orderUserSelect,
         items: {
           include: {
             product: true
@@ -803,7 +809,7 @@ export const updateOrderStatus = async (req: Request, res: Response): Promise<Re
       },
       include: {
         customer: true,
-        user: true,
+        user: orderUserSelect,
         items: {
           include: {
             product: true

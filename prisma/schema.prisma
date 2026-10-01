@@ -33,14 +33,12 @@ model User {
   menuPermissions    UserMenuPermission[]
   grantedPermissions UserPermission[] @relation("PermissionGrantedBy")
   grantedMenuPermissions UserMenuPermission[] @relation("MenuPermissionGrantedBy")
-  salaries         Salary[]
-  salariesPaid     Salary[] @relation("SalaryPaidBy")
-  salaryAdvances   SalaryAdvance[]
-  advancesApproved SalaryAdvance[] @relation("AdvanceApprovedBy")
-  advancesPaid     SalaryAdvance[] @relation("AdvancePaidBy")
+  salaryPayouts    SalaryPayout[]
+  payoutsApproved  SalaryPayout[] @relation("AdvanceApprovedBy")
+  payoutsPaid      SalaryPayout[] @relation("AdvancePaidBy")
   salaryProfile    EmployeeSalaryProfile?
-  salaryPayments              SalaryPayment[]
-  salaryPaymentsPaid          SalaryPayment[]              @relation("SalaryPaymentPaidBy")
+  monthlySalaries             MonthlySalary[]
+  monthlySalariesProcessed    MonthlySalary[]              @relation("SalaryPaymentPaidBy")
   attendanceSalaryDeductions AttendanceSalaryDeduction[]
   employeeLeaves             EmployeeLeave[]
   reviewedLeaves             EmployeeLeave[]           @relation("LeaveReviewedBy")
@@ -418,53 +416,33 @@ model Commission {
   @@map("commissions")
 }
 
-model Salary {
+// Cash handed to an employee during the month, counted against that month's
+// salary. Table keeps its historical name "salary_advances"; new rows are
+// created directly as PAID (the money is given when the row is recorded).
+// PENDING/APPROVED only exist on rows from the old request/approve flow.
+model SalaryPayout {
   id          String      @id @default(cuid())
   userId      String
   amount      Decimal     @db.Decimal(10, 2)
-  month       Int         // 1-12
-  year        Int         // e.g., 2024
-  status      SalaryStatus @default(PENDING)
-  paidAt      DateTime?
-  paidBy      String?     // User ID who processed the payment
-  notes       String?
-  deductions  Decimal?    @db.Decimal(10, 2) // Any deductions
-  bonuses     Decimal?    @db.Decimal(10, 2) // Any bonuses
-  advances    Decimal?    @db.Decimal(10, 2) // Total advances taken this month
-  createdAt   DateTime    @default(now())
-  updatedAt   DateTime    @updatedAt
-  
-  // Relations
-  user        User        @relation(fields: [userId], references: [id])
-  paidByUser  User?       @relation("SalaryPaidBy", fields: [paidBy], references: [id])
-  salaryAdvances SalaryAdvance[]
-
-  @@unique([userId, month, year])
-  @@map("salaries")
-}
-
-model SalaryAdvance {
-  id          String      @id @default(cuid())
-  userId      String
-  salaryId    String?     // Link to salary record if exists
-  amount      Decimal     @db.Decimal(10, 2)
-  requestDate DateTime    @default(now())
-  approvedBy  String?     // User ID who approved the advance
+  month       Int         // salary period this payout counts against (1-12)
+  year        Int
+  requestDate DateTime    @default(now()) // date the money was given
+  approvedBy  String?
   approvedAt  DateTime?
-  paidBy      String?     // User ID who processed the payment
+  paidBy      String?     // User who handed over the cash
   paidAt      DateTime?
-  status      AdvanceStatus @default(PENDING)
-  reason      String?     // Reason for advance
+  status      PayoutStatus @default(PAID)
+  reason      String?
   notes       String?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
-  
+
   // Relations
   user        User        @relation(fields: [userId], references: [id])
-  salary      Salary?     @relation(fields: [salaryId], references: [id])
   approvedByUser User?    @relation("AdvanceApprovedBy", fields: [approvedBy], references: [id])
   paidByUser  User?       @relation("AdvancePaidBy", fields: [paidBy], references: [id])
 
+  @@index([userId, year, month])
   @@map("salary_advances")
 }
 
@@ -518,19 +496,14 @@ model EmployeeLeave {
   @@map("employee_leaves")
 }
 
-enum SalaryStatus {
-  PENDING
-  APPROVED
-  PAID
-  CANCELLED
-}
-
-enum AdvanceStatus {
+enum PayoutStatus {
   PENDING
   APPROVED
   PAID
   REJECTED
   CANCELLED
+
+  @@map("AdvanceStatus")
 }
 
 model EmployeeSalaryProfile {
@@ -543,36 +516,46 @@ model EmployeeSalaryProfile {
   notes       String?
   createdAt   DateTime @default(now())
   updatedAt   DateTime @updatedAt
-  
+
   // Relations
   user        User     @relation(fields: [userId], references: [id])
-  salaryPayments SalaryPayment[]
-  
+  monthlySalaries MonthlySalary[]
+
   @@map("employee_salary_profiles")
 }
 
-model SalaryPayment {
+// One row per employee per month, written when the month is processed.
+// Table keeps its historical name "salary_payments".
+//   netAmount    = amount + bonuses - deductions - advances - previousBalance
+//   paidAmount   = max(netAmount, 0)  -> cash handed over at processing time
+//   carryForward = max(-netAmount, 0) -> what the employee still owes; becomes
+//                                        the next processed month's previousBalance
+model MonthlySalary {
   id          String      @id @default(cuid())
   userId      String
   profileId   String      // Link to salary profile
-  amount      Decimal     @db.Decimal(10, 2) // Actual amount paid (can differ from base)
+  amount      Decimal     @db.Decimal(10, 2) // Base salary used for this month
   month       Int         // 1-12
   year        Int         // e.g., 2024
-  status      SalaryPaymentStatus @default(PENDING)
-  paidAt      DateTime?
-  paidBy      String?     // User ID who processed the payment
-  deductions  Decimal?    @db.Decimal(10, 2) // Any deductions
-  bonuses     Decimal?    @db.Decimal(10, 2) // Any bonuses
-  advances    Decimal?    @db.Decimal(10, 2) // Total advances taken this month
+  status      SalaryPaymentStatus @default(PENDING) // PAID = processed
+  paidAt      DateTime?   // when the month was processed
+  paidBy      String?     // User ID who processed the month
+  deductions  Decimal?    @db.Decimal(10, 2) // Attendance / other deductions
+  bonuses     Decimal?    @db.Decimal(10, 2)
+  advances    Decimal?    @db.Decimal(10, 2) // Total payouts already given this month
+  previousBalance Decimal @default(0) @db.Decimal(10, 2) // Owed from earlier months
+  netAmount   Decimal     @default(0) @db.Decimal(10, 2)
+  paidAmount  Decimal     @default(0) @db.Decimal(10, 2)
+  carryForward Decimal    @default(0) @db.Decimal(10, 2)
   notes       String?
   createdAt   DateTime    @default(now())
   updatedAt   DateTime    @updatedAt
-  
+
   // Relations
   user        User        @relation(fields: [userId], references: [id])
   profile     EmployeeSalaryProfile @relation(fields: [profileId], references: [id])
   paidByUser  User?       @relation("SalaryPaymentPaidBy", fields: [paidBy], references: [id])
-  
+
   @@unique([userId, month, year])
   @@map("salary_payments")
 }

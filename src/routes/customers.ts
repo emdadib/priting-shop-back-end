@@ -31,8 +31,9 @@ router.get('/:id', getCustomerById);
 router.get('/:id/orders', getCustomerOrders);
 
 router.post('/', [
-  body('firstName').notEmpty().withMessage('First name is required'),
-  body('lastName').notEmpty().withMessage('Last name is required'),
+  body('firstName').trim().notEmpty().withMessage('First name is required'),
+  // Last name is optional so the POS quick-add can create a customer from a single name
+  body('lastName').optional({ values: 'falsy' }).trim().isString().withMessage('Last name must be a string'),
   body('phone').optional().isString().withMessage('Phone must be a string'),
   validateRequest
 ], createCustomer);

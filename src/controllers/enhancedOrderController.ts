@@ -29,7 +29,7 @@ const calculatePrice = async (productId: string, quantity: number, customUnitPri
       costPrice = product.baseCostPrice;
       break;
 
-    case 'VARIABLE':
+    case 'VARIABLE': {
       // Find the appropriate pricing tier
       const tier = product.productPricingTiers.find(t => 
         quantity >= t.minQuantity && (!t.maxQuantity || quantity <= t.maxQuantity)
@@ -44,6 +44,7 @@ const calculatePrice = async (productId: string, quantity: number, customUnitPri
         costPrice = product.baseCostPrice;
       }
       break;
+    }
 
     case 'CUSTOM':
       if (customUnitPrice) {

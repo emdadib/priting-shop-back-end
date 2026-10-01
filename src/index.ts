@@ -34,9 +34,7 @@ import permissionRoutes from './routes/permissions';
 import supplierPaymentRoutes from './routes/supplierPayments';
 import photocopyRoutes from './routes/photocopy';
 import loanRoutes from './routes/loans';
-import salaryRoutes from './routes/salaries';
-import salaryAdvanceRoutes from './routes/salaryAdvances';
-import improvedSalaryRoutes from './routes/improvedSalary';
+import salaryRoutes from './routes/salary';
 
 // Import middleware
 import { errorHandler } from './middleware/errorHandler';
@@ -61,8 +59,9 @@ const io = new Server(server, {
 // Cloud Run uses PORT environment variable, default to 8080 for production
 const PORT = process.env.PORT || (process.env.NODE_ENV === 'production' ? 8080 : 3001);
 
-// Trust proxy - Required for Cloud Run and proper rate limiting behind proxies
-app.set('trust proxy', true);
+// Trust exactly one proxy hop (Cloud Run). `true` trusts any X-Forwarded-For, which
+// lets clients spoof their IP and makes express-rate-limit log ERR_ERL_PERMISSIVE_TRUST_PROXY.
+app.set('trust proxy', 1);
 
 // Rate limiting - More lenient for development
 const limiter = rateLimit({
@@ -133,9 +132,7 @@ app.use('/api/warranties', authenticateToken, warrantyRoutes);
 app.use('/api/permissions', permissionRoutes);
 app.use('/api/photocopy', photocopyRoutes);
 app.use('/api/loans', loanRoutes);
-app.use('/api/salaries', authenticateToken, salaryRoutes);
-app.use('/api/salary-advances', authenticateToken, salaryAdvanceRoutes);
-app.use('/api/improved-salary', improvedSalaryRoutes);
+app.use('/api/salary', authenticateToken, salaryRoutes);
 
 // Socket.io connection handling
 io.on('connection', (socket) => {
@@ -206,4 +203,4 @@ server.listen(PORT, () => {
   }
 });
 
-export default app; 
+export default app;
