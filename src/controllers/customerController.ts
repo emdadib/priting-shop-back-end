@@ -63,10 +63,13 @@ export const createCustomer = async (req: Request, res: Response): Promise<Respo
     // Convert empty email string to null
     const emailValue = email && email.trim() !== '' ? email.trim() : null;
 
+    // Last name is optional (POS quick-add creates customers from a single name)
+    const lastNameValue = typeof lastName === 'string' ? lastName.trim() : '';
+
     const customer = await prisma.customer.create({
       data: {
         firstName,
-        lastName,
+        lastName: lastNameValue,
         email: emailValue,
         phone,
         address
@@ -79,7 +82,7 @@ export const createCustomer = async (req: Request, res: Response): Promise<Respo
       action: 'CREATE',
       entity: 'CUSTOMER',
       entityId: customer.id,
-      newValues: { firstName, lastName, email: emailValue, phone, address },
+      newValues: { firstName, lastName: lastNameValue, email: emailValue, phone, address },
       ipAddress: req.ip,
       userAgent: req.get('User-Agent')
     });
@@ -212,15 +215,16 @@ export const deleteCustomer = async (req: Request, res: Response): Promise<Respo
 // Search customers
 export const searchCustomers = async (req: Request, res: Response): Promise<Response | void> => {
   try {
-    const { query } = req.query;
+    // The route validates `q`; read the same parameter here
+    const q = String(req.query.q ?? '').trim();
 
     const customers = await prisma.customer.findMany({
       where: {
         OR: [
-          { firstName: { contains: query as string, mode: 'insensitive' } },
-          { lastName: { contains: query as string, mode: 'insensitive' } },
-          { email: { contains: query as string, mode: 'insensitive' } },
-          { phone: { contains: query as string, mode: 'insensitive' } }
+          { firstName: { contains: q, mode: 'insensitive' } },
+          { lastName: { contains: q, mode: 'insensitive' } },
+          { email: { contains: q, mode: 'insensitive' } },
+          { phone: { contains: q, mode: 'insensitive' } }
         ]
       },
       orderBy: {

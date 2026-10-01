@@ -61,7 +61,7 @@ function buildClosureDaysYmdInMonth(
   todayCeil: Date
 ): Set<string> {
   const set = new Set<string>();
-  let cur = new Date(year, month - 1, 1);
+  const cur = new Date(year, month - 1, 1);
   while (cur.getMonth() === month - 1) {
     const dayDate = new Date(cur.getFullYear(), cur.getMonth(), cur.getDate());
     if (dayDate > todayCeil) break;
@@ -149,7 +149,7 @@ function countApprovedLeaveDaysOnWorkingDates(
   const ws = new Set(workingDays.map(toYmd));
   const counted = new Set<string>();
   for (const range of leaveRanges) {
-    let cur = startOfLocalDay(range.startDate);
+    const cur = startOfLocalDay(range.startDate);
     const last = startOfLocalDay(range.endDate);
     while (cur <= last) {
       const key = toYmd(cur);
@@ -171,7 +171,7 @@ function getWorkingDaysInMonth(
   const today = new Date();
   today.setHours(23, 59, 59, 999);
 
-  let current = new Date(year, month - 1, 1);
+  const current = new Date(year, month - 1, 1);
   while (current.getMonth() === month - 1) {
     const dayDate = new Date(current.getFullYear(), current.getMonth(), current.getDate());
     if (dayDate <= today && !isWeekendDay(dayDate, weekendDays)) {

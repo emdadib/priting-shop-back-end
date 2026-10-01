@@ -344,7 +344,7 @@ export const getCompanyLedger = async (req: Request, res: Response) => {
       const transactionType = transaction.type;
 
       // Initialize account type if not exists
-      if (!balancesByAccountType.hasOwnProperty(transactionAccountType)) {
+      if (!Object.prototype.hasOwnProperty.call(balancesByAccountType, transactionAccountType)) {
         balancesByAccountType[transactionAccountType] = 0;
       }
 
@@ -1028,7 +1028,8 @@ export const getExpenseSummary = async (req: Request, res: Response) => {
       }
     });
 
-    // Category breakdown
+    // Category-wise totals for the filtered period: amount and entry count per
+    // category, largest first. Uncategorized expenses get their own row.
     const categoryBreakdown = await prisma.companyTransaction.groupBy({
       by: ['expenseCategoryId'],
       where: {
@@ -1037,6 +1038,9 @@ export const getExpenseSummary = async (req: Request, res: Response) => {
       },
       _sum: {
         amount: true
+      },
+      _count: {
+        _all: true
       }
     });
 
@@ -1048,16 +1052,20 @@ export const getExpenseSummary = async (req: Request, res: Response) => {
       }
     });
 
-    const categoryBreakdownWithNames = categoryBreakdown.map(item => {
-      const category = categories.find(c => c.id === item.expenseCategoryId);
-      const amount = Number(item._sum.amount || 0);
-      const total = Number(totalExpenses._sum.amount || 0);
-      return {
-        category: category?.name || 'Uncategorized',
-        amount,
-        percentage: total > 0 ? Math.round((amount / total) * 100) : 0
-      };
-    });
+    const grandTotal = Number(totalExpenses._sum.amount || 0);
+    const categoryBreakdownWithNames = categoryBreakdown
+      .map(item => {
+        const category = categories.find(c => c.id === item.expenseCategoryId);
+        const amount = Number(item._sum.amount || 0);
+        return {
+          categoryId: item.expenseCategoryId,
+          category: category?.name || 'Uncategorized',
+          amount,
+          count: item._count._all,
+          percentage: grandTotal > 0 ? Math.round((amount / grandTotal) * 100) : 0
+        };
+      })
+      .sort((a, b) => b.amount - a.amount);
 
     // Monthly trend (last 6 months)
     const monthlyTrend = [];

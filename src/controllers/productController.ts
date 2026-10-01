@@ -541,7 +541,7 @@ export const createProduct = async (req: Request, res: Response): Promise<Respon
     // Handle Prisma errors
     if (error.code) {
       switch (error.code) {
-        case 'P2002':
+        case 'P2002': {
           // Unique constraint violation
           const target = error.meta?.target;
           if (target && target.includes('sku')) {
@@ -560,6 +560,7 @@ export const createProduct = async (req: Request, res: Response): Promise<Respon
             success: false,
             message: 'A product with these details already exists'
           });
+        }
         
         case 'P2003':
           // Foreign key constraint violation
