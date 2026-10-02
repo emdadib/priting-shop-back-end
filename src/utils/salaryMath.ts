@@ -13,11 +13,15 @@
  *   net > 0  -> the company pays `net` now and the employee is square.
  *   net < 0  -> the employee took more than they earned; nothing is paid and
  *               the shortfall is carried forward to the next processed month.
+ *
+ * A month can also be SKIPPED (employee not present for the full month): no
+ * salary is calculated, what was given stays as pay, earlier debt carries on.
  */
 
 export type PayoutStatus = 'PENDING' | 'APPROVED' | 'PAID' | 'REJECTED' | 'CANCELLED';
-export type MonthlyStatus = 'PENDING' | 'PAID' | 'CANCELLED';
-export type RowStatus = 'OPEN' | 'PROCESSED';
+export type MonthlyStatus = 'PENDING' | 'PAID' | 'CANCELLED' | 'SKIPPED';
+/** OPEN = not closed yet; PROCESSED = salary settled; SKIPPED = closed without salary. */
+export type RowStatus = 'OPEN' | 'PROCESSED' | 'SKIPPED';
 
 export interface Period {
   month: number; // 1-12
@@ -175,6 +179,7 @@ export interface MonthTotals {
   employees: number;
   processedCount: number;
   openCount: number;
+  skippedCount: number;
   baseSalary: number;
   payouts: number;
   deductions: number;
@@ -185,7 +190,7 @@ export interface MonthTotals {
   toPayAtProcessing: number;
   /** Cash already handed over at processing time this month. */
   paidAtProcessing: number;
-  /** Debt carried forward by processed rows. */
+  /** Debt carried forward by closed rows (processed or skipped). */
   owed: number;
   /** Debt the open rows would carry forward if processed as-is. */
   projectedOwed: number;
@@ -215,12 +220,9 @@ const fullName = (p: PersonRef) => `${p.firstName} ${p.lastName}`.trim().toLower
 
 export function buildMonthReport(input: MonthReportInput): MonthReport {
   const profileByUser = new Map(input.profiles.map((p) => [p.userId, p]));
-  const processedByUser = new Map(
-    input.processed.filter((p) => p.status === 'PAID').map((p) => [p.userId, p])
-  );
-  const draftByUser = new Map(
-    input.processed.filter((p) => p.status !== 'PAID').map((p) => [p.userId, p])
-  );
+  const isClosed = (p: ReportProcessed) => p.status === 'PAID' || p.status === 'SKIPPED';
+  const closedByUser = new Map(input.processed.filter(isClosed).map((p) => [p.userId, p]));
+  const draftByUser = new Map(input.processed.filter((p) => !isClosed(p)).map((p) => [p.userId, p]));
   const deductionByUser = new Map(input.deductions.map((d) => [d.userId, d]));
 
   const payoutsByUser = new Map<string, ReportPayout[]>();
@@ -240,7 +242,7 @@ export function buildMonthReport(input: MonthReportInput): MonthReport {
 
   for (const [userId, user] of users) {
     const profile = profileByUser.get(userId) ?? null;
-    const processed = processedByUser.get(userId) ?? null;
+    const processed = closedByUser.get(userId) ?? null;
     const draft = draftByUser.get(userId) ?? null;
     const attendance = deductionByUser.get(userId) ?? null;
     const payouts = (payoutsByUser.get(userId) ?? []).slice().sort((a, b) => a.date.localeCompare(b.date));
@@ -253,7 +255,7 @@ export function buildMonthReport(input: MonthReportInput): MonthReport {
       rows.push({
         userId,
         user,
-        status: 'PROCESSED',
+        status: processed.status === 'SKIPPED' ? 'SKIPPED' : 'PROCESSED',
         hasProfile: !!profile,
         baseSalary: toNumber(processed.amount),
         attendance,
@@ -322,6 +324,7 @@ export function summarizeRows(rows: EmployeeMonthRow[]): MonthTotals {
     employees: rows.length,
     processedCount: 0,
     openCount: 0,
+    skippedCount: 0,
     baseSalary: 0,
     payouts: 0,
     deductions: 0,
@@ -336,11 +339,17 @@ export function summarizeRows(rows: EmployeeMonthRow[]): MonthTotals {
   };
 
   for (const row of rows) {
-    totals.baseSalary += row.baseSalary;
     totals.payouts += row.payoutsTotal;
+    totals.previousBalance += row.previousBalance;
+    if (row.status === 'SKIPPED') {
+      // No salary this month: what was given stays as pay, earlier debt carries on.
+      totals.skippedCount += 1;
+      totals.owed += row.carryForward;
+      continue;
+    }
+    totals.baseSalary += row.baseSalary;
     totals.deductions += row.deductions;
     totals.bonuses += row.bonuses;
-    totals.previousBalance += row.previousBalance;
     totals.netAmount += row.netAmount;
     if (row.status === 'PROCESSED') {
       totals.processedCount += 1;
