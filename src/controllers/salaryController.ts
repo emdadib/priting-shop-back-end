@@ -38,6 +38,16 @@ type Db = Tx | typeof prisma;
 const SALARY_EXPENSE_CATEGORY = 'Salary';
 const ACTIVE_PAYOUT_STATUSES = ['PENDING', 'APPROVED', 'PAID'] as const;
 
+/** A closed month: salary paid out (PAID) or skipped because the employee was not present for the full month. */
+const CLOSED_STATUSES = ['PAID', 'SKIPPED'] as const;
+type ClosedStatus = (typeof CLOSED_STATUSES)[number];
+const isClosed = (status: string | null | undefined): status is ClosedStatus =>
+  (CLOSED_STATUSES as readonly string[]).includes(status ?? '');
+const closedMessage = (status: ClosedStatus, period: Period) =>
+  status === 'SKIPPED'
+    ? `${periodLabel(period)} was skipped (closed without salary) for this employee. Undo the skip first.`
+    : `${periodLabel(period)} is already processed for this employee. Undo the processing first.`;
+
 const userSelect = {
   id: true,
   firstName: true,
@@ -65,6 +75,23 @@ const monthlyInclude = {
 
 const fail = (res: Response, status: number, message: string) =>
   res.status(status).json({ success: false, message });
+
+/**
+ * 500 whose message tells the admin what to do. The common field failure is
+ * a database that has not had the salary migration applied yet (Prisma
+ * P2021 = table missing, P2022 = column missing).
+ */
+const failFromError = (res: Response, error: unknown, fallback: string) => {
+  const code = (error as { code?: string } | null)?.code;
+  if (code === 'P2021' || code === 'P2022') {
+    return fail(
+      res,
+      500,
+      `${fallback}: the database is behind the code. Run "npm run migrate:deploy" inside server/ and restart the server.`
+    );
+  }
+  return fail(res, 500, fallback);
+};
 
 const fullName = (u: { firstName: string; lastName: string }) => `${u.firstName} ${u.lastName}`.trim();
 
@@ -184,7 +211,7 @@ function latestProcessedBefore(db: Db, userId: string, period: Period) {
   return db.monthlySalary.findFirst({
     where: {
       userId,
-      status: 'PAID',
+      status: { in: [...CLOSED_STATUSES] },
       OR: [{ year: { lt: period.year } }, { year: period.year, month: { lt: period.month } }],
     },
     orderBy: [{ year: 'desc' }, { month: 'desc' }],
@@ -196,7 +223,7 @@ function firstProcessedAfter(db: Db, userId: string, period: Period) {
   return db.monthlySalary.findFirst({
     where: {
       userId,
-      status: 'PAID',
+      status: { in: [...CLOSED_STATUSES] },
       OR: [{ year: { gt: period.year } }, { year: period.year, month: { gt: period.month } }],
     },
     orderBy: [{ year: 'asc' }, { month: 'asc' }],
@@ -226,7 +253,7 @@ export const getProfiles = async (_req: Request, res: Response): Promise<Respons
     return res.json({ success: true, data: profiles.map(toProfile) });
   } catch (error) {
     console.error('Get salary profiles error:', error);
-    return fail(res, 500, 'Failed to fetch salary profiles');
+    return failFromError(res, error, 'Failed to fetch salary profiles');
   }
 };
 
@@ -256,7 +283,7 @@ export const setBaseSalary = async (req: Request, res: Response): Promise<Respon
     return res.status(existing ? 200 : 201).json({ success: true, data: toProfile(profile) });
   } catch (error) {
     console.error('Set base salary error:', error);
-    return fail(res, 500, 'Failed to save base salary');
+    return failFromError(res, error, 'Failed to save base salary');
   }
 };
 
@@ -283,7 +310,7 @@ async function loadMonthReport(period: Period) {
     prisma.monthlySalary.findMany({ where: { year, month }, include: monthlyInclude }),
     prisma.attendanceSalaryDeduction.findMany({ where: { year, month } }),
     prisma.monthlySalary.findMany({
-      where: { status: 'PAID', ...beforePeriod },
+      where: { status: { in: [...CLOSED_STATUSES] }, ...beforePeriod },
       orderBy: [{ year: 'desc' }, { month: 'desc' }],
       select: { userId: true, carryForward: true },
     }),
@@ -312,7 +339,7 @@ export const getMonthReport = async (req: Request, res: Response): Promise<Respo
     return res.json({ success: true, data: await loadMonthReport(period) });
   } catch (error) {
     console.error('Get salary month report error:', error);
-    return fail(res, 500, 'Failed to build the salary report');
+    return failFromError(res, error, 'Failed to build the salary report');
   }
 };
 
@@ -339,7 +366,7 @@ export const getEmployeeYear = async (req: Request, res: Response): Promise<Resp
 
     const months = Array.from({ length: 12 }, (_, i) => i + 1).map((month) => {
       const monthPayouts = payouts.filter((p) => p.month === month).map(toPayout);
-      const row = processed.find((m) => m.month === month && m.status === 'PAID');
+      const row = processed.find((m) => m.month === month && isClosed(m.status));
       const attendance = deductions.find((d) => d.month === month);
       const payoutsTotal = round2(
         monthPayouts.filter((p) => p.status === 'PAID').reduce((s, p) => s + p.amount, 0)
@@ -350,7 +377,7 @@ export const getEmployeeYear = async (req: Request, res: Response): Promise<Resp
           month,
           year,
           label: periodLabel({ month, year }),
-          status: 'PROCESSED' as const,
+          status: row.status === 'SKIPPED' ? ('SKIPPED' as const) : ('PROCESSED' as const),
           baseSalary: plain.amount,
           payoutsTotal: plain.advances,
           payoutsCount: monthPayouts.filter((p) => p.status === 'PAID').length,
@@ -423,7 +450,7 @@ export const getEmployeeYear = async (req: Request, res: Response): Promise<Resp
     });
   } catch (error) {
     console.error('Get employee salary year error:', error);
-    return fail(res, 500, 'Failed to fetch employee salary history');
+    return failFromError(res, error, 'Failed to fetch employee salary history');
   }
 };
 
@@ -446,8 +473,8 @@ export const createPayout = async (req: Request, res: Response): Promise<Respons
     const processed = await prisma.monthlySalary.findUnique({
       where: { userId_month_year: { userId, month: period.month, year: period.year } },
     });
-    if (processed?.status === 'PAID') {
-      return fail(res, 400, `${periodLabel(period)} is already processed for this employee. Undo the processing first.`);
+    if (processed && isClosed(processed.status)) {
+      return fail(res, 400, closedMessage(processed.status, period));
     }
 
     const givenAt = date ? new Date(date) : new Date();
@@ -493,7 +520,7 @@ export const createPayout = async (req: Request, res: Response): Promise<Respons
     return res.status(201).json({ success: true, data: toPayout(payout) });
   } catch (error) {
     console.error('Create salary payout error:', error);
-    return fail(res, 500, 'Failed to record salary payout');
+    return failFromError(res, error, 'Failed to record salary payout');
   }
 };
 
@@ -511,7 +538,7 @@ export const payPendingPayout = async (req: Request, res: Response): Promise<Res
     const processed = await prisma.monthlySalary.findUnique({
       where: { userId_month_year: { userId: existing.userId, ...period } },
     });
-    if (processed?.status === 'PAID') return fail(res, 400, `${periodLabel(period)} is already processed. Undo it first.`);
+    if (processed && isClosed(processed.status)) return fail(res, 400, closedMessage(processed.status, period));
 
     const now = new Date();
     const payout = await prisma.$transaction(async (tx) => {
@@ -541,7 +568,7 @@ export const payPendingPayout = async (req: Request, res: Response): Promise<Res
     return res.json({ success: true, data: toPayout(payout) });
   } catch (error) {
     console.error('Pay pending payout error:', error);
-    return fail(res, 500, 'Failed to hand over payout');
+    return failFromError(res, error, 'Failed to hand over payout');
   }
 };
 
@@ -570,7 +597,7 @@ export const cancelPayout = async (req: Request, res: Response): Promise<Respons
     return res.json({ success: true, data: toPayout(updated) });
   } catch (error) {
     console.error('Cancel payout error:', error);
-    return fail(res, 500, 'Failed to cancel payout');
+    return failFromError(res, error, 'Failed to cancel payout');
   }
 };
 
@@ -584,8 +611,8 @@ export const deletePayout = async (req: Request, res: Response): Promise<Respons
     const processed = await prisma.monthlySalary.findUnique({
       where: { userId_month_year: { userId: existing.userId, ...period } },
     });
-    if (processed?.status === 'PAID') {
-      return fail(res, 400, `${periodLabel(period)} is already processed. Undo the processing before deleting a payout.`);
+    if (processed && isClosed(processed.status)) {
+      return fail(res, 400, closedMessage(processed.status, period));
     }
 
     await prisma.$transaction(async (tx) => {
@@ -603,7 +630,7 @@ export const deletePayout = async (req: Request, res: Response): Promise<Respons
     return res.json({ success: true, message: 'Payout deleted' });
   } catch (error) {
     console.error('Delete payout error:', error);
-    return fail(res, 500, 'Failed to delete payout');
+    return failFromError(res, error, 'Failed to delete payout');
   }
 };
 
@@ -617,6 +644,8 @@ interface ProcessInput extends Period {
   bonuses?: number;
   notes?: string;
   actorId: string;
+  /** Close the month without salary (employee not present for the full month). */
+  skip?: boolean;
 }
 
 type ProcessOutcome =
@@ -632,14 +661,14 @@ async function processEmployeeMonth(input: ProcessInput): Promise<ProcessOutcome
     if (!profile) return { ok: false, status: 400, reason: 'No base salary set for this employee' };
 
     const existing = await tx.monthlySalary.findUnique({ where: { userId_month_year: { userId, month, year } } });
-    if (existing?.status === 'PAID') return { ok: false, status: 400, reason: `${periodLabel(period)} is already processed` };
+    if (existing && isClosed(existing.status)) return { ok: false, status: 400, reason: closedMessage(existing.status, period) };
 
     const later = await firstProcessedAfter(tx, userId, period);
     if (later) {
       return {
         ok: false,
         status: 400,
-        reason: `${periodLabel({ month: later.month, year: later.year })} is already processed; earlier months cannot be processed after it`,
+        reason: `${periodLabel({ month: later.month, year: later.year })} is already closed; earlier months cannot be changed after it`,
       };
     }
 
@@ -651,26 +680,30 @@ async function processEmployeeMonth(input: ProcessInput): Promise<ProcessOutcome
     }
     const payoutsTotal = round2(payouts.reduce((sum, p) => sum + toNumber(p.amount), 0));
 
-    let deductions = input.deductions;
+    let deductions = input.skip ? 0 : input.deductions;
     if (deductions === undefined) {
       const attendance = await tx.attendanceSalaryDeduction.findUnique({
         where: { userId_month_year: { userId, month, year } },
       });
       deductions = toNumber(attendance?.deductionAmount);
     }
-    const bonuses = input.bonuses ?? 0;
+    const bonuses = input.skip ? 0 : input.bonuses ?? 0;
 
     const previous = await latestProcessedBefore(tx, userId, period);
     const previousBalance = toNumber(previous?.carryForward);
 
     const baseSalary = toNumber(profile.baseSalary);
-    const figures = computeMonthlySalary({ baseSalary, deductions, bonuses, payouts: payoutsTotal, previousBalance });
+    // Skipped: nothing is calculated or paid; what was given stays as the
+    // employee's pay for the month and earlier debt simply carries on.
+    const figures = input.skip
+      ? { netAmount: 0, paidAmount: 0, carryForward: previousBalance }
+      : computeMonthlySalary({ baseSalary, deductions, bonuses, payouts: payoutsTotal, previousBalance });
     const now = new Date();
 
     const data = {
       profileId: profile.id,
       amount: baseSalary,
-      status: 'PAID' as const,
+      status: input.skip ? ('SKIPPED' as const) : ('PAID' as const),
       paidAt: now,
       paidBy: input.actorId,
       deductions: round2(deductions),
@@ -728,7 +761,38 @@ export const processMonth = async (req: Request, res: Response): Promise<Respons
     return res.status(201).json({ success: true, data: plain });
   } catch (error) {
     console.error('Process salary month error:', error);
-    return fail(res, 500, 'Failed to process salary');
+    return failFromError(res, error, 'Failed to process salary');
+  }
+};
+
+/** Close a month without salary: the employee was not present for the full month. */
+export const skipMonth = async (req: Request, res: Response): Promise<Response | void> => {
+  try {
+    const { userId, reason } = req.body as { userId: string; reason?: string };
+    const period = parsePeriod(req.body);
+    if (!isValidPeriod(period)) return fail(res, 400, 'Invalid month or year');
+
+    const outcome = await processEmployeeMonth({
+      userId,
+      ...period,
+      skip: true,
+      notes: reason,
+      actorId: req.user?.id || 'unknown',
+    });
+    if (!outcome.ok) return fail(res, outcome.status, outcome.reason);
+
+    const plain = toProcessed(outcome.row);
+    await audit(req, {
+      action: 'CREATE',
+      entity: 'MONTHLY_SALARY',
+      entityId: plain.id,
+      newValues: { ...period, ...plain, user: undefined, processedBy: undefined, skipped: true },
+    });
+
+    return res.status(201).json({ success: true, data: plain });
+  } catch (error) {
+    console.error('Skip salary month error:', error);
+    return failFromError(res, error, 'Failed to skip this month');
   }
 };
 
@@ -736,10 +800,12 @@ export const processAllForMonth = async (req: Request, res: Response): Promise<R
   try {
     const period = parsePeriod(req.body);
     if (!isValidPeriod(period)) return fail(res, 400, 'Invalid month or year');
-    const notes = (req.body as { notes?: string }).notes;
+    const { notes, userIds } = req.body as { notes?: string; userIds?: string[] };
+    // Optional subset: the dialog lets the admin untick people who should wait.
+    const only = Array.isArray(userIds) && userIds.length > 0 ? new Set(userIds) : null;
 
     const report = await loadMonthReport(period);
-    const open = report.rows.filter((r) => r.status === 'OPEN');
+    const open = report.rows.filter((r) => r.status === 'OPEN' && (!only || only.has(r.userId)));
 
     const processed: ReturnType<typeof toProcessed>[] = [];
     const skipped: { userId: string; name: string; reason: string }[] = [];
@@ -774,7 +840,7 @@ export const processAllForMonth = async (req: Request, res: Response): Promise<R
     });
   } catch (error) {
     console.error('Process all salaries error:', error);
-    return fail(res, 500, 'Failed to process salaries');
+    return failFromError(res, error, 'Failed to process salaries');
   }
 };
 
@@ -783,12 +849,12 @@ export const undoProcessMonth = async (req: Request, res: Response): Promise<Res
     const id = String(req.params.id);
     const existing = await prisma.monthlySalary.findUnique({ where: { id }, include: monthlyInclude });
     if (!existing) return fail(res, 404, 'Processed month not found');
-    if (existing.status !== 'PAID') return fail(res, 400, 'This month has not been processed');
+    if (!isClosed(existing.status)) return fail(res, 400, 'This month is not closed');
 
     const period = { month: existing.month, year: existing.year };
     const later = await firstProcessedAfter(prisma, existing.userId, period);
     if (later) {
-      return fail(res, 400, `Undo ${periodLabel({ month: later.month, year: later.year })} first; it was processed after this month`);
+      return fail(res, 400, `Undo ${periodLabel({ month: later.month, year: later.year })} first; it was closed after this month`);
     }
 
     await prisma.$transaction(async (tx) => {
@@ -806,7 +872,7 @@ export const undoProcessMonth = async (req: Request, res: Response): Promise<Res
     return res.json({ success: true, message: `${periodLabel(period)} is open again for ${fullName(existing.user)}` });
   } catch (error) {
     console.error('Undo salary processing error:', error);
-    return fail(res, 500, 'Failed to undo salary processing');
+    return failFromError(res, error, 'Failed to undo salary processing');
   }
 };
 

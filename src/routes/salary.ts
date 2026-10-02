@@ -13,6 +13,7 @@ import {
   processAllForMonth,
   processMonth,
   setBaseSalary,
+  skipMonth,
   undoProcessMonth,
 } from '../controllers/salaryController';
 
@@ -88,9 +89,20 @@ router.post('/process', [
 router.post('/process-all', [
   requireAdmin,
   ...periodBody,
+  body('userIds').optional({ nullable: true }).isArray().withMessage('userIds must be a list'),
+  body('userIds.*').isString().withMessage('userIds must contain employee ids'),
   body('notes').optional({ nullable: true }).isString().withMessage('Notes must be text'),
   validateRequest,
 ], processAllForMonth);
+
+// Close a month without salary (employee not present for the full month).
+router.post('/skip', [
+  requireAdmin,
+  body('userId').notEmpty().withMessage('Employee is required'),
+  ...periodBody,
+  body('reason').optional({ nullable: true }).isString().withMessage('Reason must be text'),
+  validateRequest,
+], skipMonth);
 
 router.delete('/process/:id', [requireAdmin, param('id').notEmpty(), validateRequest], undoProcessMonth);
 

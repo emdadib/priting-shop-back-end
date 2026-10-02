@@ -188,6 +188,52 @@ describe('buildMonthReport', () => {
     expect(row.carryForward).toBe(2000);
   });
 
+  it('treats a skipped month as closed: no salary, payouts stay as pay, earlier debt carries on', () => {
+    const skipped: ReportProcessed = {
+      id: 'm2',
+      userId: 'u2',
+      status: 'SKIPPED',
+      amount: 12000,
+      deductions: 0,
+      bonuses: 0,
+      advances: 3000,
+      previousBalance: 500,
+      netAmount: 0,
+      paidAmount: 0,
+      carryForward: 500,
+      paidAt: '2026-09-30T12:00:00.000Z',
+      processedBy: person('admin', 'Admin'),
+      notes: 'Joined on the 20th',
+      user: person('u2', 'Karim'),
+    };
+
+    const report = buildMonthReport({
+      ...period,
+      profiles: [profile('u1', 20000, 'Rahim'), profile('u2', 12000, 'Karim')],
+      payouts: [payout('u2', 3000)],
+      processed: [skipped],
+      deductions: [],
+      previousBalances: new Map(),
+    });
+
+    const karim = report.rows.find((r) => r.userId === 'u2')!;
+    expect(karim.status).toBe('SKIPPED');
+    expect(karim.paidAmount).toBe(0);
+    expect(karim.carryForward).toBe(500);
+    expect(karim.processed?.notes).toBe('Joined on the 20th');
+    expect(report.totals).toMatchObject({
+      employees: 2,
+      openCount: 1,
+      processedCount: 0,
+      skippedCount: 1,
+      baseSalary: 20000,
+      payouts: 3000,
+      toPayAtProcessing: 20000,
+      owed: 500,
+      cashOut: 3000,
+    });
+  });
+
   it('summarizes an empty month', () => {
     expect(summarizeRows([])).toMatchObject({ employees: 0, baseSalary: 0, cashOut: 0 });
   });

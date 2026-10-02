@@ -564,6 +564,7 @@ enum SalaryPaymentStatus {
   PENDING
   PAID
   CANCELLED
+  SKIPPED // closed without salary: employee was not present for the full month
 }
 
 model PriceHistory {
